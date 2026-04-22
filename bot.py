@@ -132,7 +132,7 @@ class ApplyButtonView(View):
 
 
 # ---------- КОМАНДА SETUP ----------
-@tree.command(name="setup", description="Создать кнопку подачи заявки")
+@tree.command(name="mcsetup", description="Создать кнопку подачи заявки")
 async def setup(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎮 Заявка на сервер",
