@@ -50,7 +50,7 @@ class ApplicationModal(Modal, title="Заявка на сервер"):
         embed.add_field(name="Возраст", value=age_int, inline=False)
         embed.add_field(name="О себе", value=about_text[:1024], inline=False)
 
-        # -------- авто-принятие --------
+        # AUTO ACCEPT
         if age_int >= 14 and len(about_text) >= 32:
             result = await whitelist_add(nick)
 
@@ -59,12 +59,10 @@ class ApplicationModal(Modal, title="Заявка на сервер"):
             embed.add_field(name="RCON", value=result, inline=False)
 
             await mod_channel.send(embed=embed)
-
             await interaction.response.send_message("✅ Ты автоматически принят!", ephemeral=True)
         else:
             await mod_channel.send(embed=embed, view=ApplicationView(nick))
-
-            await interaction.response.send_message("📨 Заявка отправлена модераторам", ephemeral=True)
+            await interaction.response.send_message("📨 Заявка отправлена", ephemeral=True)
 
 
 # ---------------- MODERATION VIEW ----------------
@@ -73,12 +71,16 @@ class ApplicationView(View):
         super().__init__(timeout=None)
         self.nickname = nickname
 
-    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.green)
+    @discord.ui.button(
+        label="✅ Принять",
+        style=discord.ButtonStyle.green,
+        custom_id="accept_btn"
+    )
     async def accept(self, interaction: discord.Interaction, button: Button):
-        embed = interaction.message.embeds[0]
 
         result = await whitelist_add(self.nickname)
 
+        embed = interaction.message.embeds[0]
         embed.color = 0x00ff00
         embed.add_field(name="Статус", value="Принят", inline=False)
         embed.add_field(name="RCON", value=result, inline=False)
@@ -86,10 +88,14 @@ class ApplicationView(View):
         await interaction.message.edit(embed=embed, view=None)
         await interaction.response.send_message("Принято", ephemeral=True)
 
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.red)
+    @discord.ui.button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.red,
+        custom_id="deny_btn"
+    )
     async def deny(self, interaction: discord.Interaction, button: Button):
-        embed = interaction.message.embeds[0]
 
+        embed = interaction.message.embeds[0]
         embed.color = 0xff0000
         embed.add_field(name="Статус", value="Отклонён", inline=False)
 
@@ -102,14 +108,19 @@ class ApplyButtonView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Подать заявку", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(
+        label="📋 Подать заявку",
+        style=discord.ButtonStyle.blurple,
+        custom_id="apply_btn"
+    )
     async def apply(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(ApplicationModal())
 
 
-# ---------------- COMMAND ----------------
-@tree.command(name="setup", description="Создать сообщение с заявками")
+# ---------------- SETUP COMMAND ----------------
+@tree.command(name="setup", description="Создать систему заявок")
 async def setup(interaction: discord.Interaction):
+
     embed = discord.Embed(
         title="🎮 Заявка на сервер",
         description="Нажми кнопку ниже, чтобы подать заявку",
@@ -123,11 +134,13 @@ async def setup(interaction: discord.Interaction):
 # ---------------- READY ----------------
 @bot.event
 async def on_ready():
+
+    # persistent views (БЕЗ ОШИБКИ)
     bot.add_view(ApplyButtonView())
     bot.add_view(ApplicationView("temp"))
 
     await tree.sync()
-    print(f"Бот запущен как {bot.user}")
+    print(f"Logged in as {bot.user}")
 
 
 # ---------------- RUN ----------------
