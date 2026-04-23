@@ -1,6 +1,14 @@
 import os
+import asyncio
 import discord
 import asyncpg
+import aiohttp
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import io
+import re
+
 from discord import app_commands
 from discord.ui import Modal, TextInput, View, Button
 from dotenv import load_dotenv
@@ -19,220 +27,242 @@ MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID"))
 NEWBIE_ROLE_ID = int(os.getenv("NEWBIE_ROLE_ID"))
 PLAYER_ROLE_ID = int(os.getenv("PLAYER_ROLE_ID"))
 
-intents = discord.Intents.default()
-intents.members = True
+LEVEL_1_ROLE = int(os.getenv("LEVEL_1_ROLE"))
+LEVEL_2_ROLE = int(os.getenv("LEVEL_2_ROLE"))
+LEVEL_3_ROLE = int(os.getenv("LEVEL_3_ROLE"))
+LEVEL_4_ROLE = int(os.getenv("LEVEL_4_ROLE"))
 
-bot = discord.Client(intents=intents)
+bot = discord.Client(intents=discord.Intents.all())
 tree = app_commands.CommandTree(bot)
 
 db = None
 
 
-# ---------------- RCON ----------------
-async def whitelist_add(nick: str):
+# ================= RCON =================
+async def get_playtime(nick):
     try:
         with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
-            return mcr.command(f"whitelist add {nick}")
-    except Exception as e:
-        return f"RCON ERROR: {e}"
-
-
-# ---------------- ROLE + NICK ----------------
-async def update_member(guild: discord.Guild, user_id: int, nickname: str):
-    member = guild.get_member(user_id)
-    if not member:
-        return
-
-    newbie = guild.get_role(NEWBIE_ROLE_ID)
-    player = guild.get_role(PLAYER_ROLE_ID)
-
-    if newbie and newbie in member.roles:
-        await member.remove_roles(newbie)
-
-    if player and player not in member.roles:
-        await member.add_roles(player)
-
-    try:
-        await member.edit(nick=nickname)
+            return mcr.command(f"online total {nick}")
     except:
-        pass
+        return "0 hours"
 
 
-# ---------------- MODAL ----------------
-class ApplicationModal(Modal, title="Заявка на сервер"):
-    nickname = TextInput(label="Ник Minecraft", max_length=16)
-    age = TextInput(label="Возраст", max_length=2)
+def parse_hours(text: str):
+    h = re.findall(r"(\\d+)\\s*hour", text)
+    m = re.findall(r"(\\d+)\\s*minute", text)
+
+    hours = sum(map(int, h)) if h else 0
+    minutes = sum(map(int, m)) if m else 0
+
+    return hours + minutes // 60
+
+
+# ================= PvP =================
+def calculate_pvp_rating(kills, deaths):
+    if deaths == 0:
+        return kills * 2
+    return round((kills / deaths) * 100)
+
+
+def get_pvp_rank(rating):
+    if rating >= 800:
+        return "🔥 Легенда"
+    if rating >= 400:
+        return "💀 Убийца"
+    if rating >= 200:
+        return "🥇 Воин"
+    if rating >= 100:
+        return "🥈 Боец"
+    return "🥉 Новичок"
+
+
+# ================= LEVEL SYSTEM =================
+async def update_level(member, hours):
+    guild = member.guild
+
+    roles = {
+        1: guild.get_role(LEVEL_1_ROLE),
+        2: guild.get_role(LEVEL_2_ROLE),
+        3: guild.get_role(LEVEL_3_ROLE),
+        4: guild.get_role(LEVEL_4_ROLE),
+    }
+
+    if hours >= 150:
+        level = 4
+    elif hours >= 50:
+        level = 3
+    elif hours >= 10:
+        level = 2
+    else:
+        level = 1
+
+    for r in roles.values():
+        if r in member.roles:
+            await member.remove_roles(r)
+
+    if roles[level]:
+        await member.add_roles(roles[level])
+
+    return level
+
+
+# ================= MODAL =================
+class ApplicationModal(Modal, title="Заявка"):
+    nickname = TextInput(label="Minecraft ник")
+    age = TextInput(label="Возраст")
     about = TextInput(label="О себе", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
 
         user_id = interaction.user.id
 
-        # 🔒 антиспам через БД
-        row = await db.fetchrow(
-            "SELECT status FROM applications WHERE user_id = $1",
-            user_id
-        )
+        row = await db.fetchrow("SELECT status FROM applications WHERE user_id=$1", user_id)
 
-        if row:
-            if row["status"] == "pending":
-                await interaction.response.send_message(
-                    "❌ У тебя уже есть активная заявка",
-                    ephemeral=True
-                )
-                return
-
-            if row["status"] == "accepted":
-                await interaction.response.send_message(
-                    "✅ Ты уже принят",
-                    ephemeral=True
-                )
-                return
-
-        try:
-            age_int = int(self.age.value)
-        except:
-            await interaction.response.send_message("Возраст должен быть числом", ephemeral=True)
+        if row and row["status"] == "pending":
+            await interaction.response.send_message("❌ Уже есть заявка", ephemeral=True)
             return
 
-        nick = self.nickname.value
-        about_text = self.about.value
-
-        # записываем заявку
         await db.execute("""
             INSERT INTO applications (user_id, nickname, status)
-            VALUES ($1, $2, 'pending')
+            VALUES ($1,$2,'pending')
             ON CONFLICT (user_id)
-            DO UPDATE SET
-                nickname = EXCLUDED.nickname,
-                status = 'pending',
-                updated_at = NOW()
-        """, user_id, nick)
+            DO UPDATE SET nickname=$2,status='pending'
+        """, user_id, self.nickname.value)
 
-        mod_channel = bot.get_channel(MOD_CHANNEL_ID)
+        age = int(self.age.value)
+        about = self.about.value
 
-        embed = discord.Embed(title="📨 Новая заявка", color=0x3498db)
-        embed.add_field(name="Ник", value=nick, inline=False)
-        embed.add_field(name="Возраст", value=age_int, inline=False)
-        embed.add_field(name="О себе", value=about_text[:1024], inline=False)
+        mod = bot.get_channel(MOD_CHANNEL_ID)
 
-        # ✅ авто-принятие
-        if age_int >= 14 and len(about_text) >= 32:
+        embed = discord.Embed(title="📨 Заявка")
+        embed.add_field(name="Nick", value=self.nickname.value)
+        embed.add_field(name="Age", value=age)
+        embed.add_field(name="About", value=about)
 
-            await update_member(interaction.guild, user_id, nick)
-            result = await whitelist_add(nick)
+        # AUTO ACCEPT
+        if age >= 14 and len(about) >= 32:
+
+            member = interaction.guild.get_member(user_id)
+
+            await whitelist_add(self.nickname.value)
+            await update_level(member, 0)
 
             await db.execute("""
-                UPDATE applications
-                SET status = 'accepted', updated_at = NOW()
-                WHERE user_id = $1
+                UPDATE applications SET status='accepted'
+                WHERE user_id=$1
             """, user_id)
 
             embed.color = 0x00ff00
-            embed.add_field(name="Статус", value="Авто-принят", inline=False)
-            embed.add_field(name="RCON", value=result, inline=False)
+            embed.add_field(name="Status", value="AUTO ACCEPT")
 
-            await mod_channel.send(embed=embed)
-            await interaction.response.send_message("✅ Ты автоматически принят!", ephemeral=True)
-
+            await mod.send(embed=embed)
+            await interaction.response.send_message("✅ Принят", ephemeral=True)
         else:
-            await mod_channel.send(
-                embed=embed,
-                view=ApplicationView(nick, user_id)
-            )
-            await interaction.response.send_message("📨 Заявка отправлена", ephemeral=True)
+            await mod.send(embed=embed, view=ApplicationView())
+            await interaction.response.send_message("📨 Отправлено", ephemeral=True)
 
 
-# ---------------- MODERATION ----------------
+# ================= VIEW =================
 class ApplicationView(View):
-    def __init__(self, nickname: str, user_id: int):
-        super().__init__(timeout=None)
-        self.nickname = nickname
-        self.user_id = user_id
-
-    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.green, custom_id="accept_btn")
-    async def accept(self, interaction: discord.Interaction, button: Button):
-
-        await update_member(interaction.guild, self.user_id, self.nickname)
-        result = await whitelist_add(self.nickname)
-
-        await db.execute("""
-            UPDATE applications
-            SET status = 'accepted', updated_at = NOW()
-            WHERE user_id = $1
-        """, self.user_id)
-
-        embed = interaction.message.embeds[0]
-        embed.color = 0x00ff00
-        embed.add_field(name="Статус", value="Принят", inline=False)
-        embed.add_field(name="RCON", value=result, inline=False)
-
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.send_message("Принято", ephemeral=True)
-
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.red, custom_id="deny_btn")
-    async def deny(self, interaction: discord.Interaction, button: Button):
-
-        await db.execute("""
-            UPDATE applications
-            SET status = 'denied', updated_at = NOW()
-            WHERE user_id = $1
-        """, self.user_id)
-
-        embed = interaction.message.embeds[0]
-        embed.color = 0xff0000
-        embed.add_field(name="Статус", value="Отклонён", inline=False)
-
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.send_message("Отклонено", ephemeral=True)
-
-
-# ---------------- APPLY BUTTON ----------------
-class ApplyButtonView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Подать заявку", style=discord.ButtonStyle.blurple, custom_id="apply_btn")
-    async def apply(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(ApplicationModal())
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept")
+    async def accept(self, interaction, button):
+
+        user_id = interaction.message.embeds[0].fields[0].value
+
+        await db.execute("UPDATE applications SET status='accepted' WHERE user_id=$1", user_id)
+
+        await interaction.response.send_message("Принято")
 
 
-# ---------------- SETUP ----------------
-@tree.command(name="setup", description="Создать систему заявок")
-async def setup(interaction: discord.Interaction):
+# ================= PROFILE =================
+@tree.command(name="profile")
+async def profile(interaction: discord.Interaction):
 
-    embed = discord.Embed(
-        title="🎮 Заявка на сервер",
-        description="Нажми кнопку ниже, чтобы подать заявку",
-        color=0x2ecc71
-    )
+    row = await db.fetchrow("SELECT nickname FROM applications WHERE user_id=$1", interaction.user.id)
 
-    await interaction.channel.send(embed=embed, view=ApplyButtonView())
-    await interaction.response.send_message("Готово", ephemeral=True)
+    if not row:
+        await interaction.response.send_message("❌ Нет заявки", ephemeral=True)
+        return
+
+    nick = row["nickname"]
+
+    play = await get_playtime(nick)
+    hours = parse_hours(play)
+
+    level = await update_level(interaction.user, hours)
+
+    url = f"http://YOUR_SERVER:8804/v1/player/{nick}/activity?period=7"
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url) as r:
+            data = await r.json()
+
+    days = [d["date"] for d in data]
+    vals = [d["activity"] for d in data]
+
+    plt.plot(days, vals)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    plt.close()
+
+    file = discord.File(buf, "graph.png")
+
+    embed = discord.Embed(title="Профиль")
+    embed.add_field(name="Nick", value=nick)
+    embed.add_field(name="Hours", value=hours)
+    embed.add_field(name="Level", value=level)
+
+    await interaction.response.send_message(embed=embed, file=file)
 
 
-# ---------------- READY ----------------
+# ================= TOP PvP =================
+@tree.command(name="pvp_top_global")
+async def pvp_top_global(interaction: discord.Interaction):
+
+    await interaction.response.defer()
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get("http://YOUR_SERVER:8804/v1/players") as r:
+            players = await r.json()
+
+    data = []
+
+    for p in players:
+        rating = calculate_pvp_rating(p.get("kills",0), p.get("deaths",0))
+        data.append((p["name"], rating))
+
+    data.sort(key=lambda x: x[1], reverse=True)
+
+    text = "\n".join([f"{i+1}. {n} - {r}" for i,(n,r) in enumerate(data[:10])])
+
+    embed = discord.Embed(title="PvP Top", description=text)
+
+    await interaction.followup.send(embed=embed)
+
+
+# ================= READY =================
 @bot.event
 async def on_ready():
-    global db
 
+    global db
     db = await asyncpg.connect(DATABASE_URL)
 
     await db.execute("""
-        CREATE TABLE IF NOT EXISTS applications (
+        CREATE TABLE IF NOT EXISTS applications(
             user_id BIGINT PRIMARY KEY,
             nickname TEXT,
-            status TEXT,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
+            status TEXT
         )
     """)
 
-    bot.add_view(ApplyButtonView())
-
+    bot.add_view(ApplicationView())
     await tree.sync()
-    print(f"Logged in as {bot.user}")
+
+    print("BOT READY")
 
 
-# ---------------- RUN ----------------
 bot.run(TOKEN)
