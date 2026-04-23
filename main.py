@@ -16,24 +16,33 @@ from mcrcon import MCRcon
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
-RCON_HOST = os.getenv("RCON_HOST")
-RCON_PORT = int(os.getenv("RCON_PORT", "25575"))
-RCON_PASSWORD = os.getenv("RCON_PASSWORD")
+# ================= SAFE ENV =================
+def env_int(name: str, default=0):
+    v = os.getenv(name)
+    return int(v) if v and v.isdigit() else default
 
-MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID", "0"))
 
-# SAFE ROLE PARSING (fix crash)
-def get_role(env_name):
-    v = os.getenv(env_name)
-    return int(v) if v and v.isdigit() else 0
+def env_str(name: str, default=None):
+    return os.getenv(name) or default
 
-LEVEL_1_ROLE = get_role("LEVEL_1_ROLE")
-LEVEL_2_ROLE = get_role("LEVEL_2_ROLE")
-LEVEL_3_ROLE = get_role("LEVEL_3_ROLE")
-LEVEL_4_ROLE = get_role("LEVEL_4_ROLE")
+
+TOKEN = env_str("DISCORD_TOKEN")
+
+DATABASE_URL = env_str("DATABASE_URL")
+
+RCON_HOST = env_str("RCON_HOST")
+RCON_PORT = env_int("RCON_PORT", 25575)
+RCON_PASSWORD = env_str("RCON_PASSWORD")
+
+MOD_CHANNEL_ID = env_int("MOD_CHANNEL_ID")
+
+
+LEVEL_1_ROLE = env_int("LEVEL_1_ROLE")
+LEVEL_2_ROLE = env_int("LEVEL_2_ROLE")
+LEVEL_3_ROLE = env_int("LEVEL_3_ROLE")
+LEVEL_4_ROLE = env_int("LEVEL_4_ROLE")
+
 
 bot = discord.Client(intents=discord.Intents.all())
 tree = app_commands.CommandTree(bot)
@@ -49,7 +58,6 @@ async def get_playtime(nick):
                 return mcr.command(f"online total {nick}")
 
         return await asyncio.to_thread(run)
-
     except:
         return "0 hours"
 
@@ -210,8 +218,7 @@ async def profile(interaction: discord.Interaction):
     play = await get_playtime(nick)
     hours = parse_hours(play)
 
-    member = interaction.user
-    level = await update_level(member, hours)
+    level = await update_level(interaction.user, hours)
 
     url = f"http://YOUR_SERVER:8804/v1/player/{nick}/activity?period=7"
 
@@ -265,6 +272,8 @@ async def pvp_top_global(interaction: discord.Interaction):
 async def on_ready():
 
     global db
+
+    print("BOT STARTING...")
 
     db = await asyncpg.connect(DATABASE_URL)
 
