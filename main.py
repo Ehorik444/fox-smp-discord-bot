@@ -13,7 +13,12 @@ RCON_PORT = int(os.getenv("RCON_PORT"))
 RCON_PASSWORD = os.getenv("RCON_PASSWORD")
 MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID"))
 
+NEWBIE_ROLE_ID = int(os.getenv("NEWBIE_ROLE_ID"))
+PLAYER_ROLE_ID = int(os.getenv("PLAYER_ROLE_ID"))
+
 intents = discord.Intents.default()
+intents.members = True  # важно для ролей
+
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
@@ -27,6 +32,31 @@ async def whitelist_add(nick: str):
         return f"RCON ERROR: {e}"
 
 
+# ---------------- ROLE + NICK ----------------
+async def update_member(guild: discord.Guild, user_id: int, nickname: str):
+    member = guild.get_member(user_id)
+
+    if not member:
+        return
+
+    newbie_role = guild.get_role(NEWBIE_ROLE_ID)
+    player_role = guild.get_role(PLAYER_ROLE_ID)
+
+    # убрать новичка
+    if newbie_role and newbie_role in member.roles:
+        await member.remove_roles(newbie_role)
+
+    # выдать игрока
+    if player_role and player_role not in member.roles:
+        await member.add_roles(player_role)
+
+    # сменить ник
+    try:
+        await member.edit(nick=nickname)
+    except:
+        pass
+
+
 # ---------------- MODAL ----------------
 class ApplicationModal(Modal, title="Заявка на сервер"):
     nickname = TextInput(label="Ник Minecraft", max_length=16)
@@ -34,6 +64,7 @@ class ApplicationModal(Modal, title="Заявка на сервер"):
     about = TextInput(label="О себе", style=discord.TextStyle.paragraph, max_length=300)
 
     async def on_submit(self, interaction: discord.Interaction):
+
         try:
             age_int = int(self.age.value)
         except:
@@ -52,6 +83,8 @@ class ApplicationModal(Modal, title="Заявка на сервер"):
 
         # AUTO ACCEPT
         if age_int >= 14 and len(about_text) >= 32:
+
+            await update_member(interaction.guild, interaction.user.id, nick)
             result = await whitelist_add(nick)
 
             embed.color = 0x00ff00
@@ -60,16 +93,21 @@ class ApplicationModal(Modal, title="Заявка на сервер"):
 
             await mod_channel.send(embed=embed)
             await interaction.response.send_message("✅ Ты автоматически принят!", ephemeral=True)
+
         else:
-            await mod_channel.send(embed=embed, view=ApplicationView(nick))
+            await mod_channel.send(
+                embed=embed,
+                view=ApplicationView(nick, interaction.user.id)
+            )
             await interaction.response.send_message("📨 Заявка отправлена", ephemeral=True)
 
 
 # ---------------- MODERATION VIEW ----------------
 class ApplicationView(View):
-    def __init__(self, nickname: str):
+    def __init__(self, nickname: str, user_id: int):
         super().__init__(timeout=None)
         self.nickname = nickname
+        self.user_id = user_id
 
     @discord.ui.button(
         label="✅ Принять",
@@ -78,6 +116,7 @@ class ApplicationView(View):
     )
     async def accept(self, interaction: discord.Interaction, button: Button):
 
+        await update_member(interaction.guild, self.user_id, self.nickname)
         result = await whitelist_add(self.nickname)
 
         embed = interaction.message.embeds[0]
@@ -135,9 +174,7 @@ async def setup(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
 
-    # persistent views (БЕЗ ОШИБКИ)
     bot.add_view(ApplyButtonView())
-    bot.add_view(ApplicationView("temp"))
 
     await tree.sync()
     print(f"Logged in as {bot.user}")
