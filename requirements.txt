@@ -2,3 +2,5 @@ discord.py
 python-dotenv
 mcrcon
 asyncpg
+aiohttp
+matplotlib
