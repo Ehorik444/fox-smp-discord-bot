@@ -1,125 +1,268 @@
 import os
-import io
+import asyncio
 import discord
+import asyncpg
 import aiohttp
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import io
+import re
 
 from discord import app_commands
+from discord.ui import Modal, TextInput, View, Button
 from dotenv import load_dotenv
+from mcrcon import MCRcon
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+RCON_HOST = os.getenv("RCON_HOST")
+RCON_PORT = int(os.getenv("RCON_PORT"))
+RCON_PASSWORD = os.getenv("RCON_PASSWORD")
 
-intents = discord.Intents.default()
-intents.members = True
+MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID"))
+NEWBIE_ROLE_ID = int(os.getenv("NEWBIE_ROLE_ID"))
+PLAYER_ROLE_ID = int(os.getenv("PLAYER_ROLE_ID"))
 
-bot = discord.Client(intents=intents)
+LEVEL_1_ROLE = int(os.getenv("LEVEL_1_ROLE"))
+LEVEL_2_ROLE = int(os.getenv("LEVEL_2_ROLE"))
+LEVEL_3_ROLE = int(os.getenv("LEVEL_3_ROLE"))
+LEVEL_4_ROLE = int(os.getenv("LEVEL_4_ROLE"))
+
+bot = discord.Client(intents=discord.Intents.all())
 tree = app_commands.CommandTree(bot)
 
-http: aiohttp.ClientSession = None
+db = None
 
 
-# ================= HTTP LAYER (FAST + SHARED) =================
-async def api_get(path: str):
-    async with http.get(f"{API_URL}{path}") as r:
-        if r.status != 200:
-            return None
-        return await r.json()
+# ================= RCON =================
+async def get_playtime(nick):
+    try:
+        with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
+            return mcr.command(f"online total {nick}")
+    except:
+        return "0 hours"
+
+
+def parse_hours(text: str):
+    h = re.findall(r"(\\d+)\\s*hour", text)
+    m = re.findall(r"(\\d+)\\s*minute", text)
+
+    hours = sum(map(int, h)) if h else 0
+    minutes = sum(map(int, m)) if m else 0
+
+    return hours + minutes // 60
+
+
+# ================= PvP =================
+def calculate_pvp_rating(kills, deaths):
+    if deaths == 0:
+        return kills * 2
+    return round((kills / deaths) * 100)
+
+
+def get_pvp_rank(rating):
+    if rating >= 800:
+        return "🔥 Легенда"
+    if rating >= 400:
+        return "💀 Убийца"
+    if rating >= 200:
+        return "🥇 Воин"
+    if rating >= 100:
+        return "🥈 Боец"
+    return "🥉 Новичок"
+
+
+# ================= LEVEL SYSTEM =================
+async def update_level(member, hours):
+    guild = member.guild
+
+    roles = {
+        1: guild.get_role(LEVEL_1_ROLE),
+        2: guild.get_role(LEVEL_2_ROLE),
+        3: guild.get_role(LEVEL_3_ROLE),
+        4: guild.get_role(LEVEL_4_ROLE),
+    }
+
+    if hours >= 150:
+        level = 4
+    elif hours >= 50:
+        level = 3
+    elif hours >= 10:
+        level = 2
+    else:
+        level = 1
+
+    for r in roles.values():
+        if r in member.roles:
+            await member.remove_roles(r)
+
+    if roles[level]:
+        await member.add_roles(roles[level])
+
+    return level
+
+
+# ================= MODAL =================
+class ApplicationModal(Modal, title="Заявка"):
+    nickname = TextInput(label="Minecraft ник")
+    age = TextInput(label="Возраст")
+    about = TextInput(label="О себе", style=discord.TextStyle.paragraph)
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        user_id = interaction.user.id
+
+        row = await db.fetchrow("SELECT status FROM applications WHERE user_id=$1", user_id)
+
+        if row and row["status"] == "pending":
+            await interaction.response.send_message("❌ Уже есть заявка", ephemeral=True)
+            return
+
+        await db.execute("""
+            INSERT INTO applications (user_id, nickname, status)
+            VALUES ($1,$2,'pending')
+            ON CONFLICT (user_id)
+            DO UPDATE SET nickname=$2,status='pending'
+        """, user_id, self.nickname.value)
+
+        age = int(self.age.value)
+        about = self.about.value
+
+        mod = bot.get_channel(MOD_CHANNEL_ID)
+
+        embed = discord.Embed(title="📨 Заявка")
+        embed.add_field(name="Nick", value=self.nickname.value)
+        embed.add_field(name="Age", value=age)
+        embed.add_field(name="About", value=about)
+
+        # AUTO ACCEPT
+        if age >= 14 and len(about) >= 32:
+
+            member = interaction.guild.get_member(user_id)
+
+            await whitelist_add(self.nickname.value)
+            await update_level(member, 0)
+
+            await db.execute("""
+                UPDATE applications SET status='accepted'
+                WHERE user_id=$1
+            """, user_id)
+
+            embed.color = 0x00ff00
+            embed.add_field(name="Status", value="AUTO ACCEPT")
+
+            await mod.send(embed=embed)
+            await interaction.response.send_message("✅ Принят", ephemeral=True)
+        else:
+            await mod.send(embed=embed, view=ApplicationView())
+            await interaction.response.send_message("📨 Отправлено", ephemeral=True)
+
+
+# ================= VIEW =================
+class ApplicationView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept")
+    async def accept(self, interaction, button):
+
+        user_id = interaction.message.embeds[0].fields[0].value
+
+        await db.execute("UPDATE applications SET status='accepted' WHERE user_id=$1", user_id)
+
+        await interaction.response.send_message("Принято")
 
 
 # ================= PROFILE =================
 @tree.command(name="profile")
 async def profile(interaction: discord.Interaction):
 
-    data = await api_get(f"/profile/{interaction.user.id}")
+    row = await db.fetchrow("SELECT nickname FROM applications WHERE user_id=$1", interaction.user.id)
 
-    if not data:
-        await interaction.response.send_message("❌ Нет данных", ephemeral=True)
+    if not row:
+        await interaction.response.send_message("❌ Нет заявки", ephemeral=True)
         return
 
-    # graph from API
-    stats = data.get("activity", [])
+    nick = row["nickname"]
 
-    fig, ax = plt.subplots()
-    ax.plot([x["date"] for x in stats], [x["value"] for x in stats])
+    play = await get_playtime(nick)
+    hours = parse_hours(play)
 
+    level = await update_level(interaction.user, hours)
+
+    url = f"http://YOUR_SERVER:8804/v1/player/{nick}/activity?period=7"
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url) as r:
+            data = await r.json()
+
+    days = [d["date"] for d in data]
+    vals = [d["activity"] for d in data]
+
+    plt.plot(days, vals)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png")
+    plt.savefig(buf, format="png")
     buf.seek(0)
-    plt.close(fig)
+    plt.close()
 
-    embed = discord.Embed(title="Profile")
-    embed.add_field(name="Nick", value=data["nick"])
-    embed.add_field(name="Hours", value=data["hours"])
-    embed.add_field(name="Level", value=data["level"])
+    file = discord.File(buf, "graph.png")
 
-    await interaction.response.send_message(
-        embed=embed,
-        file=discord.File(buf, "graph.png")
-    )
+    embed = discord.Embed(title="Профиль")
+    embed.add_field(name="Nick", value=nick)
+    embed.add_field(name="Hours", value=hours)
+    embed.add_field(name="Level", value=level)
+
+    await interaction.response.send_message(embed=embed, file=file)
 
 
-# ================= PVP TOP (ZERO COMPUTE BOT SIDE) =================
-@tree.command(name="pvp_top")
-async def pvp_top(interaction: discord.Interaction):
+# ================= TOP PvP =================
+@tree.command(name="pvp_top_global")
+async def pvp_top_global(interaction: discord.Interaction):
 
-    data = await api_get("/pvp/top")
+    await interaction.response.defer()
 
-    if not data:
-        await interaction.response.send_message("❌ API error", ephemeral=True)
-        return
+    async with aiohttp.ClientSession() as s:
+        async with s.get("http://YOUR_SERVER:8804/v1/players") as r:
+            players = await r.json()
 
-    text = "\n".join(
-        f"{i+1}. {p['name']} - {p['rating']}"
-        for i, p in enumerate(data)
-    )
+    data = []
+
+    for p in players:
+        rating = calculate_pvp_rating(p.get("kills",0), p.get("deaths",0))
+        data.append((p["name"], rating))
+
+    data.sort(key=lambda x: x[1], reverse=True)
+
+    text = "\n".join([f"{i+1}. {n} - {r}" for i,(n,r) in enumerate(data[:10])])
 
     embed = discord.Embed(title="PvP Top", description=text)
 
-    await interaction.response.send_message(embed=embed)
-
-
-# ================= APPLICATION =================
-class ApplicationModal(discord.ui.Modal, title="Заявка"):
-
-    nickname = discord.ui.TextInput(label="Minecraft ник")
-    age = discord.ui.TextInput(label="Возраст")
-    about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction: discord.Interaction):
-
-        payload = {
-            "user_id": interaction.user.id,
-            "nickname": self.nickname.value,
-            "age": int(self.age.value),
-            "about": self.about.value
-        }
-
-        result = await api_get("/application/submit")
-
-        if not result:
-            await interaction.response.send_message("❌ error", ephemeral=True)
-            return
-
-        await interaction.response.send_message("📨 Отправлено", ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 
 # ================= READY =================
 @bot.event
 async def on_ready():
 
-    global http
+    global db
+    db = await asyncpg.connect(DATABASE_URL)
 
-    http = aiohttp.ClientSession()
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS applications(
+            user_id BIGINT PRIMARY KEY,
+            nickname TEXT,
+            status TEXT
+        )
+    """)
 
+    bot.add_view(ApplicationView())
     await tree.sync()
 
-    print("🚀 ENTERPRISE BOT READY")
+    print("BOT READY")
 
 
 bot.run(TOKEN)
