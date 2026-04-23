@@ -20,15 +20,20 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 RCON_HOST = os.getenv("RCON_HOST")
-RCON_PORT = int(os.getenv("RCON_PORT"))
+RCON_PORT = int(os.getenv("RCON_PORT", "25575"))
 RCON_PASSWORD = os.getenv("RCON_PASSWORD")
 
-MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID"))
+MOD_CHANNEL_ID = int(os.getenv("MOD_CHANNEL_ID", "0"))
 
-LEVEL_1_ROLE = int(os.getenv("LEVEL_1_ROLE"))
-LEVEL_2_ROLE = int(os.getenv("LEVEL_2_ROLE"))
-LEVEL_3_ROLE = int(os.getenv("LEVEL_3_ROLE"))
-LEVEL_4_ROLE = int(os.getenv("LEVEL_4_ROLE"))
+# SAFE ROLE PARSING (fix crash)
+def get_role(env_name):
+    v = os.getenv(env_name)
+    return int(v) if v and v.isdigit() else 0
+
+LEVEL_1_ROLE = get_role("LEVEL_1_ROLE")
+LEVEL_2_ROLE = get_role("LEVEL_2_ROLE")
+LEVEL_3_ROLE = get_role("LEVEL_3_ROLE")
+LEVEL_4_ROLE = get_role("LEVEL_4_ROLE")
 
 bot = discord.Client(intents=discord.Intents.all())
 tree = app_commands.CommandTree(bot)
@@ -61,6 +66,9 @@ def parse_hours(text: str):
 
 # ================= LEVEL =================
 async def update_level(member, hours):
+    if not member:
+        return 1
+
     guild = member.guild
 
     roles = {
@@ -80,7 +88,7 @@ async def update_level(member, hours):
         level = 1
 
     for r in roles.values():
-        if r in member.roles:
+        if r and r in member.roles:
             await member.remove_roles(r)
 
     if roles[level]:
@@ -97,9 +105,18 @@ class ApplicationModal(Modal, title="Заявка"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
+        global db
+
+        if db is None:
+            await interaction.response.send_message("DB not ready", ephemeral=True)
+            return
+
         user_id = interaction.user.id
 
-        row = await db.fetchrow("SELECT status FROM applications WHERE user_id=$1", user_id)
+        row = await db.fetchrow(
+            "SELECT status FROM applications WHERE user_id=$1",
+            user_id
+        )
 
         if row and row["status"] == "pending":
             await interaction.response.send_message("❌ Уже есть заявка", ephemeral=True)
@@ -119,7 +136,6 @@ class ApplicationModal(Modal, title="Заявка"):
 
         embed = discord.Embed(title="📨 Заявка")
 
-        # ВАЖНО: user_id первым (фикс кнопки)
         embed.add_field(name="UserID", value=str(user_id))
         embed.add_field(name="Nick", value=self.nickname.value)
         embed.add_field(name="Age", value=age)
@@ -138,7 +154,7 @@ class ApplicationModal(Modal, title="Заявка"):
             embed.add_field(name="Status", value="AUTO ACCEPT")
 
             await mod.send(embed=embed)
-            await interaction.response.send_message("✅ Принят автоматически", ephemeral=True)
+            await interaction.response.send_message("✅ Принят", ephemeral=True)
 
         else:
             await mod.send(embed=embed, view=ApplicationView())
@@ -152,6 +168,8 @@ class ApplicationView(View):
 
     @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept")
     async def accept(self, interaction, button):
+
+        global db
 
         user_id = int(interaction.message.embeds[0].fields[0].value)
 
@@ -172,11 +190,16 @@ async def apply(interaction: discord.Interaction):
 @tree.command(name="profile", description="Профиль игрока")
 async def profile(interaction: discord.Interaction):
 
+    global db
+
     if db is None:
         await interaction.response.send_message("DB not ready", ephemeral=True)
         return
 
-    row = await db.fetchrow("SELECT nickname FROM applications WHERE user_id=$1", interaction.user.id)
+    row = await db.fetchrow(
+        "SELECT nickname FROM applications WHERE user_id=$1",
+        interaction.user.id
+    )
 
     if not row:
         await interaction.response.send_message("❌ Нет заявки", ephemeral=True)
@@ -187,7 +210,8 @@ async def profile(interaction: discord.Interaction):
     play = await get_playtime(nick)
     hours = parse_hours(play)
 
-    level = await update_level(interaction.user, hours)
+    member = interaction.user
+    level = await update_level(member, hours)
 
     url = f"http://YOUR_SERVER:8804/v1/player/{nick}/activity?period=7"
 
@@ -223,15 +247,13 @@ async def pvp_top_global(interaction: discord.Interaction):
         async with s.get("http://YOUR_SERVER:8804/v1/players") as r:
             players = await r.json()
 
-    data = []
+    def rating(k, d):
+        return 0 if d == 0 else round((k / d) * 100)
 
-    for p in players:
-        rating = calculate_pvp_rating(p.get("kills",0), p.get("deaths",0))
-        data.append((p["name"], rating))
-
+    data = [(p["name"], rating(p.get("kills", 0), p.get("deaths", 0))) for p in players]
     data.sort(key=lambda x: x[1], reverse=True)
 
-    text = "\n".join([f"{i+1}. {n} - {r}" for i,(n,r) in enumerate(data[:10])])
+    text = "\n".join([f"{i+1}. {n} - {r}" for i, (n, r) in enumerate(data[:10])])
 
     embed = discord.Embed(title="PvP Top", description=text)
 
@@ -243,6 +265,7 @@ async def pvp_top_global(interaction: discord.Interaction):
 async def on_ready():
 
     global db
+
     db = await asyncpg.connect(DATABASE_URL)
 
     await db.execute("""
@@ -255,7 +278,7 @@ async def on_ready():
 
     bot.add_view(ApplicationView())
 
-    print("SYNCING COMMANDS")
+    print("SYNCING COMMANDS...")
     await tree.sync()
     print("BOT READY")
 
