@@ -49,7 +49,11 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL not set")
 
 
-bot = discord.Client(intents=discord.Intents.all())
+# ✅ безопасные intents
+intents = discord.Intents.default()
+intents.members = True
+
+bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 db = None
@@ -166,14 +170,12 @@ class ApplicationModal(Modal, title="Заявка"):
             return
 
         embed = discord.Embed(title="📨 Заявка")
-
         embed.add_field(name="UserID", value=str(user_id))
         embed.add_field(name="Nick", value=self.nickname.value)
         embed.add_field(name="Age", value=str(age))
         embed.add_field(name="About", value=about)
 
         if age >= 14 and len(about) >= 32:
-
             await db.execute("""
                 UPDATE applications SET status='accepted'
                 WHERE user_id=$1
@@ -184,7 +186,6 @@ class ApplicationModal(Modal, title="Заявка"):
 
             await mod.send(embed=embed)
             await interaction.response.send_message("✅ Принят", ephemeral=True)
-
         else:
             await mod.send(embed=embed, view=ApplicationView())
             await interaction.response.send_message("📨 Отправлено", ephemeral=True)
@@ -218,8 +219,8 @@ class ApplicationView(View):
 
 
 # ================= COMMANDS =================
-@tree.command(name="apply", description="Подать заявку")
-async def apply(interaction: discord.Interaction):
+@tree.command(name="register", description="Подать заявку")
+async def register(interaction: discord.Interaction):
     await interaction.response.send_modal(ApplicationModal())
 
 
@@ -256,11 +257,11 @@ async def profile(interaction: discord.Interaction):
                     raise Exception()
                 data = await r.json()
     except:
-        await interaction.response.send_message("❌ Ошибка получения данных", ephemeral=True)
+        await interaction.response.send_message("❌ Ошибка API", ephemeral=True)
         return
 
     if not data:
-        await interaction.response.send_message("❌ Нет данных активности", ephemeral=True)
+        await interaction.response.send_message("❌ Нет данных", ephemeral=True)
         return
 
     days = [d["date"] for d in data]
@@ -280,31 +281,6 @@ async def profile(interaction: discord.Interaction):
     embed.add_field(name="Level", value=str(level))
 
     await interaction.response.send_message(embed=embed, file=file)
-
-
-@tree.command(name="pvp_top_global", description="Топ PvP игроков")
-async def pvp_top_global(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get("http://YOUR_SERVER:8804/v1/players") as r:
-                players = await r.json()
-    except:
-        await interaction.followup.send("❌ Ошибка API")
-        return
-
-    def rating(k, d):
-        return 0 if d == 0 else round((k / d) * 100)
-
-    data = [(p["name"], rating(p.get("kills", 0), p.get("deaths", 0))) for p in players]
-    data.sort(key=lambda x: x[1], reverse=True)
-
-    text = "\n".join([f"{i+1}. {n} - {r}" for i, (n, r) in enumerate(data[:10])])
-
-    embed = discord.Embed(title="PvP Top", description=text)
-
-    await interaction.followup.send(embed=embed)
 
 
 # ================= READY =================
