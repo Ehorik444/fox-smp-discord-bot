@@ -7,13 +7,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import io
-import re
 import json
+import re
+from datetime import datetime, timedelta
 
 from discord import app_commands
 from discord.ui import Modal, TextInput, View
 from dotenv import load_dotenv
-from mcrcon import MCRcon
 from openai import OpenAI
 
 load_dotenv()
@@ -62,7 +62,7 @@ async def log_action(text):
             pass
 
 
-# ================= AI SCORE =================
+# ================= AI =================
 async def ai_score_application(age, about, nick):
     prompt = f"""
 Оцени заявку 0-100.
@@ -109,15 +109,15 @@ class ApplicationModal(Modal, title="Заявка"):
             await interaction.response.send_message("DB not ready", ephemeral=True)
             return
 
-        # cooldown
+        # cooldown FIX
         if user_id in cooldowns:
-            if cooldowns[user_id] > discord.utils.utcnow():
-                await interaction.response.send_message("⏳ cooldown", ephemeral=True)
+            if cooldowns[user_id] > datetime.utcnow():
+                await interaction.response.send_message("⏳ cooldown 24h", ephemeral=True)
                 return
 
-        cooldowns[user_id] = discord.utils.utcnow() + discord.timedelta(hours=24)
+        cooldowns[user_id] = datetime.utcnow() + timedelta(hours=24)
 
-        # anti spam DB
+        # anti spam
         row = await db.fetchrow("SELECT status FROM applications WHERE user_id=$1", user_id)
         if row and row["status"] == "pending":
             await interaction.response.send_message("❌ already exists", ephemeral=True)
@@ -129,7 +129,7 @@ class ApplicationModal(Modal, title="Заявка"):
             await interaction.response.send_message("age must be number", ephemeral=True)
             return
 
-        # AI
+        # AI SCORE
         ai_raw = await ai_score_application(age, self.about.value, self.nickname.value)
 
         try:
@@ -190,21 +190,26 @@ class ApplicationModal(Modal, title="Заявка"):
             embed.add_field(name="Nick", value=self.nickname.value)
             embed.add_field(name="Score", value=str(score))
             embed.add_field(name="Reason", value=reason, inline=False)
+            embed.set_footer(text=f"user:{user_id}")
 
             await mod.send(embed=embed, view=ApplicationView())
 
         await interaction.response.send_message("sent", ephemeral=True)
 
 
-# ================= VIEW =================
+# ================= VIEW (MODERATION) =================
 class ApplicationView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    def get_user_id(self, interaction):
+        footer = interaction.message.embeds[0].footer.text
+        return int(footer.split(":")[1])
+
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
     async def accept(self, interaction, button):
 
-        user_id = int(interaction.message.embeds[0].fields[0].value)
+        user_id = self.get_user_id(interaction)
 
         await db.execute("UPDATE applications SET status='accepted' WHERE user_id=$1", user_id)
 
@@ -225,7 +230,7 @@ class ApplicationView(View):
     @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
     async def decline(self, interaction, button):
 
-        user_id = int(interaction.message.embeds[0].fields[0].value)
+        user_id = self.get_user_id(interaction)
 
         await db.execute("UPDATE applications SET status='declined' WHERE user_id=$1", user_id)
 
@@ -234,32 +239,30 @@ class ApplicationView(View):
         await interaction.response.send_message("ok")
 
 
-# ================= START PANEL =================
-class StartView(View):
-    @discord.ui.button(label="📨 Apply", style=discord.ButtonStyle.primary)
-    async def start(self, interaction, button):
+# ================= PUBLIC PANEL =================
+class PublicApplyView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📨 Подать заявку", style=discord.ButtonStyle.primary)
+    async def apply(self, interaction: discord.Interaction, button):
         await interaction.response.send_modal(ApplicationModal())
 
 
-@tree.command(name="zaiavka", description="panel")
-async def zaiavka(interaction: discord.Interaction):
+@tree.command(name="apply_panel", description="Открыть панель заявок")
+async def apply_panel(interaction: discord.Interaction):
 
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("no perms", ephemeral=True)
-        return
+    embed = discord.Embed(
+        title="📨 Заявки",
+        description="Нажми кнопку ниже чтобы подать заявку"
+    )
 
-    embed = discord.Embed(title="Apply system")
-
-    await interaction.response.send_message(embed=embed, view=StartView())
+    await interaction.response.send_message(embed=embed, view=PublicApplyView())
 
 
-# ================= AI MOD CHAT =================
-@tree.command(name="modai", description="AI mod helper")
+# ================= MOD AI =================
+@tree.command(name="modai", description="AI модератор помощник")
 async def modai(interaction: discord.Interaction, text: str):
-
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("no perms", ephemeral=True)
-        return
 
     res = await ai_score_application(0, text, "unknown")
 
@@ -270,7 +273,6 @@ async def modai(interaction: discord.Interaction, text: str):
         return
 
     embed = discord.Embed(title="AI MOD")
-
     embed.add_field(name="score", value=str(data["score"]))
     embed.add_field(name="reason", value=data["reason"], inline=False)
 
@@ -293,7 +295,7 @@ async def graph(interaction: discord.Interaction):
     buf.seek(0)
     plt.close()
 
-    await interaction.response.send_message(file=discord.File(buf, "g.png"))
+    await interaction.response.send_message(file=discord.File(buf, "graph.png"))
 
 
 # ================= READY =================
@@ -313,7 +315,7 @@ async def on_ready():
     )
     """)
 
-    bot.add_view(StartView())
+    bot.add_view(PublicApplyView())
     bot.add_view(ApplicationView())
 
     await tree.sync()
