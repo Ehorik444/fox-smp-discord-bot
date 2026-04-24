@@ -8,48 +8,41 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import io
 import re
+import json
 
 from discord import app_commands
 from discord.ui import Modal, TextInput, View
 from dotenv import load_dotenv
 from mcrcon import MCRcon
+from openai import OpenAI
 
 load_dotenv()
 
-
-# ================= SAFE ENV =================
-def env_int(name: str, default=0):
+# ================= ENV =================
+def env_int(name, default=0):
     v = os.getenv(name)
     return int(v) if v and v.isdigit() else default
 
 
-def env_str(name: str, default=None):
+def env_str(name, default=None):
     return os.getenv(name) or default
 
 
 TOKEN = env_str("DISCORD_TOKEN")
 DATABASE_URL = env_str("DATABASE_URL")
-
-RCON_HOST = env_str("RCON_HOST")
-RCON_PORT = env_int("RCON_PORT", 25575)
-RCON_PASSWORD = env_str("RCON_PASSWORD")
+OPENAI_API_KEY = env_str("OPENAI_API_KEY")
 
 MOD_CHANNEL_ID = env_int("MOD_CHANNEL_ID")
+LOG_CHANNEL_ID = env_int("LOG_CHANNEL_ID")
+APPROVED_ROLE_ID = env_int("APPROVED_ROLE_ID")
 
-LEVEL_1_ROLE = env_int("LEVEL_1_ROLE")
-LEVEL_2_ROLE = env_int("LEVEL_2_ROLE")
-LEVEL_3_ROLE = env_int("LEVEL_3_ROLE")
-LEVEL_4_ROLE = env_int("LEVEL_4_ROLE")
+AI_ONLY_MODE = True
+AUTO_ACCEPT_SCORE = 85
+AUTO_DECLINE_SCORE = 45
 
+ai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-if not TOKEN:
-    raise ValueError("DISCORD_TOKEN not set")
-
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL not set")
-
-
-# ✅ безопасные intents
+# ================= BOT =================
 intents = discord.Intents.default()
 intents.members = True
 
@@ -57,138 +50,150 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 db = None
+cooldowns = {}
 
-
-# ================= RCON =================
-async def get_playtime(nick):
-    try:
-        def run():
-            with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
-                return mcr.command(f"online total {nick}")
-
-        return await asyncio.wait_for(asyncio.to_thread(run), timeout=5)
-    except:
-        return "0 hours"
-
-
-def parse_hours(text: str):
-    h = re.findall(r"(\d+)\s*hour", text)
-    m = re.findall(r"(\d+)\s*minute", text)
-
-    hours = sum(map(int, h)) if h else 0
-    minutes = sum(map(int, m)) if m else 0
-
-    return hours + minutes // 60
-
-
-# ================= LEVEL =================
-async def update_level(member, hours):
-    if not member:
-        return 1
-
-    guild = member.guild
-
-    roles = {
-        1: guild.get_role(LEVEL_1_ROLE),
-        2: guild.get_role(LEVEL_2_ROLE),
-        3: guild.get_role(LEVEL_3_ROLE),
-        4: guild.get_role(LEVEL_4_ROLE),
-    }
-
-    if hours >= 150:
-        level = 4
-    elif hours >= 50:
-        level = 3
-    elif hours >= 10:
-        level = 2
-    else:
-        level = 1
-
-    for r in roles.values():
-        if r and r in member.roles:
-            try:
-                await member.remove_roles(r)
-            except:
-                pass
-
-    if roles[level]:
+# ================= LOG =================
+async def log_action(text):
+    ch = bot.get_channel(LOG_CHANNEL_ID)
+    if ch:
         try:
-            await member.add_roles(roles[level])
+            await ch.send(text)
         except:
             pass
 
-    return level
+
+# ================= AI SCORE =================
+async def ai_score_application(age, about, nick):
+    prompt = f"""
+Оцени заявку 0-100.
+
+Верни JSON:
+{{
+"score": число,
+"reason": "кратко"
+}}
+
+Nick: {nick}
+Age: {age}
+About: {about}
+"""
+
+    try:
+        res = await asyncio.to_thread(
+            lambda: ai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Ты строгий модератор Minecraft сервера"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
+        )
+        return res.choices[0].message.content
+    except:
+        return '{"score":50,"reason":"error"}'
 
 
 # ================= MODAL =================
 class ApplicationModal(Modal, title="Заявка"):
-    nickname = TextInput(label="Minecraft ник")
-    age = TextInput(label="Возраст")
-    about = TextInput(label="О себе", style=discord.TextStyle.paragraph)
+    nickname = TextInput(label="Nick")
+    age = TextInput(label="Age")
+    about = TextInput(label="About", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         global db
+
+        user_id = interaction.user.id
 
         if db is None:
             await interaction.response.send_message("DB not ready", ephemeral=True)
             return
 
-        if not interaction.guild:
-            await interaction.response.send_message("❌ Используй на сервере", ephemeral=True)
-            return
+        # cooldown
+        if user_id in cooldowns:
+            if cooldowns[user_id] > discord.utils.utcnow():
+                await interaction.response.send_message("⏳ cooldown", ephemeral=True)
+                return
 
-        user_id = interaction.user.id
+        cooldowns[user_id] = discord.utils.utcnow() + discord.timedelta(hours=24)
 
-        row = await db.fetchrow(
-            "SELECT status FROM applications WHERE user_id=$1",
-            user_id
-        )
-
+        # anti spam DB
+        row = await db.fetchrow("SELECT status FROM applications WHERE user_id=$1", user_id)
         if row and row["status"] == "pending":
-            await interaction.response.send_message("❌ Уже есть заявка", ephemeral=True)
+            await interaction.response.send_message("❌ already exists", ephemeral=True)
             return
 
         try:
             age = int(self.age.value)
-        except ValueError:
-            await interaction.response.send_message("❌ Возраст должен быть числом", ephemeral=True)
+        except:
+            await interaction.response.send_message("age must be number", ephemeral=True)
             return
 
-        about = self.about.value
+        # AI
+        ai_raw = await ai_score_application(age, self.about.value, self.nickname.value)
+
+        try:
+            data = json.loads(ai_raw)
+            score = data["score"]
+            reason = data["reason"]
+        except:
+            score = 50
+            reason = "parse error"
+
+        status = "pending"
+
+        if AI_ONLY_MODE:
+            if score >= AUTO_ACCEPT_SCORE:
+                status = "accepted"
+            elif score <= AUTO_DECLINE_SCORE:
+                status = "declined"
 
         await db.execute("""
-            INSERT INTO applications (user_id, nickname, status)
-            VALUES ($1,$2,'pending')
-            ON CONFLICT (user_id)
-            DO UPDATE SET nickname=$2,status='pending'
-        """, user_id, self.nickname.value)
+        INSERT INTO applications(user_id,nickname,status,score)
+        VALUES($1,$2,$3,$4)
+        ON CONFLICT(user_id)
+        DO UPDATE SET nickname=$2,status=$3,score=$4
+        """, user_id, self.nickname.value, status, score)
 
-        mod = bot.get_channel(MOD_CHANNEL_ID)
+        member = interaction.guild.get_member(user_id)
 
-        if not mod:
-            await interaction.response.send_message("❌ Канал модерации не найден", ephemeral=True)
-            return
+        # AUTO ACCEPT
+        if status == "accepted":
+            role = interaction.guild.get_role(APPROVED_ROLE_ID)
+            if role and member:
+                try:
+                    await member.add_roles(role)
+                except:
+                    pass
 
-        embed = discord.Embed(title="📨 Заявка")
-        embed.add_field(name="UserID", value=str(user_id))
-        embed.add_field(name="Nick", value=self.nickname.value)
-        embed.add_field(name="Age", value=str(age))
-        embed.add_field(name="About", value=about)
+            try:
+                await member.send("✅ Ты принят AI системой")
+            except:
+                pass
 
-        if age >= 14 and len(about) >= 32:
-            await db.execute("""
-                UPDATE applications SET status='accepted'
-                WHERE user_id=$1
-            """, user_id)
+            await log_action(f"AI ACCEPT {user_id} score={score}")
 
-            embed.color = 0x00ff00
-            embed.add_field(name="Status", value="AUTO ACCEPT")
+        # AUTO DECLINE
+        elif status == "declined":
+            try:
+                await member.send("❌ Ты отклонён AI системой")
+            except:
+                pass
 
-            await mod.send(embed=embed)
-            await interaction.response.send_message("✅ Принят", ephemeral=True)
+            await log_action(f"AI DECLINE {user_id} score={score}")
+
+        # MANUAL REVIEW
         else:
+            mod = bot.get_channel(MOD_CHANNEL_ID)
+
+            embed = discord.Embed(title="📨 Review")
+            embed.add_field(name="Nick", value=self.nickname.value)
+            embed.add_field(name="Score", value=str(score))
+            embed.add_field(name="Reason", value=reason, inline=False)
+
             await mod.send(embed=embed, view=ApplicationView())
-            await interaction.response.send_message("📨 Отправлено", ephemeral=True)
+
+        await interaction.response.send_message("sent", ephemeral=True)
 
 
 # ================= VIEW =================
@@ -196,115 +201,124 @@ class ApplicationView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept")
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
     async def accept(self, interaction, button):
-        global db
 
-        if not interaction.message.embeds:
-            await interaction.response.send_message("❌ Ошибка данных", ephemeral=True)
-            return
+        user_id = int(interaction.message.embeds[0].fields[0].value)
 
-        try:
-            user_id = int(interaction.message.embeds[0].fields[0].value)
-        except:
-            await interaction.response.send_message("❌ Не удалось получить user_id", ephemeral=True)
-            return
+        await db.execute("UPDATE applications SET status='accepted' WHERE user_id=$1", user_id)
 
-        await db.execute("""
-            UPDATE applications SET status='accepted'
-            WHERE user_id=$1
-        """, user_id)
+        member = interaction.guild.get_member(user_id)
+        role = interaction.guild.get_role(APPROVED_ROLE_ID)
 
-        await interaction.response.send_message("✅ Принято")
+        if member and role:
+            try:
+                await member.add_roles(role)
+            except:
+                pass
 
+        await log_action(f"MOD ACCEPT {user_id}")
 
-# ================= COMMANDS =================
-@tree.command(name="register", description="Подать заявку")
-async def register(interaction: discord.Interaction):
-    await interaction.response.send_modal(ApplicationModal())
+        await interaction.response.send_message("ok")
 
 
-@tree.command(name="profile", description="Профиль игрока")
-async def profile(interaction: discord.Interaction):
-    global db
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
+    async def decline(self, interaction, button):
 
-    if db is None:
-        await interaction.response.send_message("DB not ready", ephemeral=True)
+        user_id = int(interaction.message.embeds[0].fields[0].value)
+
+        await db.execute("UPDATE applications SET status='declined' WHERE user_id=$1", user_id)
+
+        await log_action(f"MOD DECLINE {user_id}")
+
+        await interaction.response.send_message("ok")
+
+
+# ================= START PANEL =================
+class StartView(View):
+    @discord.ui.button(label="📨 Apply", style=discord.ButtonStyle.primary)
+    async def start(self, interaction, button):
+        await interaction.response.send_modal(ApplicationModal())
+
+
+@tree.command(name="zaiavka", description="panel")
+async def zaiavka(interaction: discord.Interaction):
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("no perms", ephemeral=True)
         return
 
-    row = await db.fetchrow(
-        "SELECT nickname FROM applications WHERE user_id=$1",
-        interaction.user.id
-    )
+    embed = discord.Embed(title="Apply system")
 
-    if not row:
-        await interaction.response.send_message("❌ Нет заявки", ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=StartView())
+
+
+# ================= AI MOD CHAT =================
+@tree.command(name="modai", description="AI mod helper")
+async def modai(interaction: discord.Interaction, text: str):
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("no perms", ephemeral=True)
         return
 
-    nick = row["nickname"]
-
-    play = await get_playtime(nick)
-    hours = parse_hours(play)
-
-    level = await update_level(interaction.user, hours)
-
-    url = f"http://YOUR_SERVER:8804/v1/player/{nick}/activity?period=7"
+    res = await ai_score_application(0, text, "unknown")
 
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url) as r:
-                if r.status != 200:
-                    raise Exception()
-                data = await r.json()
+        data = json.loads(res)
     except:
-        await interaction.response.send_message("❌ Ошибка API", ephemeral=True)
+        await interaction.response.send_message("error", ephemeral=True)
         return
 
-    if not data:
-        await interaction.response.send_message("❌ Нет данных", ephemeral=True)
-        return
+    embed = discord.Embed(title="AI MOD")
 
-    days = [d["date"] for d in data]
-    vals = [d["activity"] for d in data]
+    embed.add_field(name="score", value=str(data["score"]))
+    embed.add_field(name="reason", value=data["reason"], inline=False)
 
-    plt.plot(days, vals)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ================= GRAPH =================
+@tree.command(name="graph", description="quality graph")
+async def graph(interaction: discord.Interaction):
+
+    rows = await db.fetch("SELECT score FROM applications")
+
+    scores = [r["score"] for r in rows]
+
+    plt.figure()
+    plt.hist(scores, bins=10)
+
     buf = io.BytesIO()
     plt.savefig(buf, format="png")
     buf.seek(0)
     plt.close()
 
-    file = discord.File(buf, "graph.png")
-
-    embed = discord.Embed(title="Профиль")
-    embed.add_field(name="Nick", value=nick)
-    embed.add_field(name="Hours", value=str(hours))
-    embed.add_field(name="Level", value=str(level))
-
-    await interaction.response.send_message(embed=embed, file=file)
+    await interaction.response.send_message(file=discord.File(buf, "g.png"))
 
 
 # ================= READY =================
 @bot.event
 async def on_ready():
-    global db
 
-    print("BOT STARTING...")
+    global db
 
     db = await asyncpg.connect(DATABASE_URL)
 
     await db.execute("""
-        CREATE TABLE IF NOT EXISTS applications(
-            user_id BIGINT PRIMARY KEY,
-            nickname TEXT,
-            status TEXT
-        )
+    CREATE TABLE IF NOT EXISTS applications(
+        user_id BIGINT PRIMARY KEY,
+        nickname TEXT,
+        status TEXT,
+        score INT DEFAULT 0
+    )
     """)
 
+    bot.add_view(StartView())
     bot.add_view(ApplicationView())
 
-    print("SYNCING COMMANDS...")
     await tree.sync()
-    print("BOT READY")
+
+    print("READY")
 
 
 bot.run(TOKEN)
