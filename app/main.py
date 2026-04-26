@@ -3,228 +3,244 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 import asyncio
-from rcon.source import Client # или другая библиотека RCON
+import re
+from rcon.source import Client
 
-# Загрузка переменных окружения
 load_dotenv()
 
-# Конфигурация
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 RCON_HOST = os.getenv('MINECRAFT_RCON_HOST')
 RCON_PORT = int(os.getenv('MINECRAFT_RCON_PORT'))
 RCON_PASS = os.getenv('MINECRAFT_RCON_PASSWORD')
 SERVER_IP = os.getenv('MINECRAFT_SERVER_IP')
+
 NEWBIE_ROLE_ID = int(os.getenv('ROLE_ID_NEWBIE'))
 PLAYER_ROLE_ID = int(os.getenv('ROLE_ID_PLAYER'))
 GUILD_ID = int(os.getenv('GUILD_ID'))
-TICKETS_CATEGORY_ID = int(os.getenv('TICKETS_CATEGORY_ID')) # Новый параметр
+TICKETS_CATEGORY_ID = int(os.getenv('TICKETS_CATEGORY_ID'))
 
-# Интенты для доступа к ролям и сообщениям
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True # Необходимо для изменения ролей
+intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-class ApplicationModal(discord.ui.Modal, title='Заявка на сервер'):
-    def __init__(self):
-        super().__init__()
+# ===================== УТИЛИТЫ =====================
 
-    mc_nickname = discord.ui.TextInput(
-        label='Ваш ник в Minecraft',
-        placeholder='Введите ник...',
-        required=True,
-        max_length=16,
-        min_length=3
-    )
-    age = discord.ui.TextInput(
-        label='Ваш возраст',
-        placeholder='Введите возраст...',
-        required=True,
-        style=discord.TextStyle.short
-    )
-    how_found = discord.ui.TextInput(
-        label='Откуда узнали о сервере?',
-        placeholder='Расскажите...',
-        required=True,
-        style=discord.TextStyle.paragraph    )
-    who_invited = discord.ui.TextInput(
-        label='Кто пригласил?',
-        placeholder='Имя пригласившего (если был)',
-        required=False, # Необязательное поле
-        style=discord.TextStyle.short
-    )
-    about = discord.ui.TextInput(
-        label='Расскажите немного о себе',
-        placeholder='Расскажите о своих интересах, опыте и т.д....',
-        required=True,
-        style=discord.TextStyle.paragraph,
-        max_length=480
-    )
+def valid_nickname(nick: str) -> bool:
+    return bool(re.match(r'^[A-Za-z0-9_]{3,16}$', nick))
+
+
+async def run_rcon(command: str):
+    loop = asyncio.get_running_loop()
+
+    def _run():
+        with Client(RCON_HOST, RCON_PORT, passwd=RCON_PASS, timeout=5) as client:
+            return client.run(command)
+
+    return await loop.run_in_executor(None, _run)
+
+
+async def safe_dm(user: discord.User, text: str):
+    try:
+        await user.send(text)
+    except discord.Forbidden:
+        print(f"Не удалось отправить ЛС пользователю {user}")
+
+
+# ===================== МОДАЛКА =====================
+
+class ApplicationModal(discord.ui.Modal, title='Заявка на сервер'):
+
+    mc_nickname = discord.ui.TextInput(label='Ник Minecraft', max_length=16)
+    age = discord.ui.TextInput(label='Возраст')
+    how_found = discord.ui.TextInput(label='Откуда узнали?', style=discord.TextStyle.paragraph)
+    who_invited = discord.ui.TextInput(label='Кто пригласил?', required=False)
+    about = discord.ui.TextInput(label='О себе', style=discord.TextStyle.paragraph, max_length=400)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Заявка отправлена! Ожидайте ответ.", ephemeral=True)
-        
-        application_data = {
+
+        if not valid_nickname(self.mc_nickname.value):
+            return await interaction.response.send_message(
+                "Некорректный ник Minecraft", ephemeral=True
+            )
+
+        await interaction.response.send_message("Заявка отправлена!", ephemeral=True)
+
+        data = {
             "mc_nickname": self.mc_nickname.value,
             "age": self.age.value,
             "how_found": self.how_found.value,
-            "who_invited": self.who_invited.value if self.who_invited.value else "Не указан",
+            "who_invited": self.who_invited.value or "Не указан",
             "about": self.about.value
         }
 
-        # Запуск создания тикета в фоне
-        asyncio.create_task(create_ticket(interaction.user, application_data))
+        asyncio.create_task(create_ticket(interaction.user, data))
 
-async def create_ticket(user: discord.User,  dict):
+
+# ===================== СОЗДАНИЕ ТИКЕТА =====================
+
+async def create_ticket(user: discord.User, data: dict):
+
     guild = bot.get_guild(GUILD_ID)
     if not guild:
-        print("Гильдия не найдена.")
+        print("Guild not found")
         return
 
     category = guild.get_channel(TICKETS_CATEGORY_ID)
-    if not category or not isinstance(category, discord.CategoryChannel):
-        print(f"Категория тикетов с ID {TICKETS_CATEGORY_ID} не найдена или не является категорией.")
+    if not isinstance(category, discord.CategoryChannel):
+        print("Invalid category")
         return
 
-    # Создаём канал с именем, например, "ticket-{username}"
-    ticket_name = f"ticket-{user.name.lower().replace(' ', '-')}-{user.discriminator}"
+    # ❗ защита от дублей
+    for ch in category.text_channels:
+        if str(user.id) in ch.topic:
+            await safe_dm(user, "У вас уже есть открытая заявка")
+            return
+
+    name = f"ticket-{user.name}-{user.id}"
+
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        user: discord.PermissionOverwrite(read_messages=True), # Позволяем пользователю читать тикет
+        user: discord.PermissionOverwrite(read_messages=True)
     }
-    ticket_channel = await guild.create_text_channel(ticket_name, category=category, overwrites=overwrites)
-    
-    # Отправляем сообщение с данными
-    embed = discord.Embed(        title=f"Новая заявка от {user.display_name}",
-        description=f"**Пользователь Discord:** {user.mention}\n**ID:** {user.id}",
+
+    try:
+        channel = await guild.create_text_channel(
+            name=name,
+            category=category,
+            overwrites=overwrites,
+            topic=str(user.id)
+        )
+    except discord.Forbidden:
+        print("Нет прав создавать канал")
+        return
+
+    embed = discord.Embed(
+        title=f"Заявка от {user}",
+        description=f"ID: {user.id}",
         color=0x00aaff
     )
-    embed.add_field(name="Ник в Minecraft", value=data["mc_nickname"], inline=False)
-    embed.add_field(name="Возраст", value=data["age"], inline=False)
-    embed.add_field(name="Откуда узнал?", value=data["how_found"], inline=False)
-    embed.add_field(name="Кто пригласил?", value=data["who_invited"], inline=False)
-    embed.add_field(name="О себе", value=data["about"], inline=False)
 
-    view = TicketActionsView(user, data)
-    message = await ticket_channel.send(embed=embed, view=view)
-    # Опционально: прикрепить сообщение, чтобы оно всегда было видно наверху
-    # await message.pin()
+    for k, v in data.items():
+        embed.add_field(name=k, value=v, inline=False)
 
-class TicketActionsView(discord.ui.View):
-    def __init__(self, applicant: discord.User,  dict):
-        super().__init__(timeout=None) # Кнопки всегда активны
-        self.applicant = applicant
+    view = TicketView(user, data)
+    message = await channel.send(embed=embed, view=view)
+    view.message = message
+
+
+# ===================== VIEW =====================
+
+class TicketView(discord.ui.View):
+
+    def __init__(self, user: discord.User, data: dict):
+        super().__init__(timeout=None)
+        self.user = user
         self.data = data
+        self.message = None
 
-    async def finalize_ticket(self, channel: discord.TextChannel, success: bool, reason: str = ""):
-        """Закрывает тикет: отправляет сообщение пользователю, выполняет действия и удаляет канал."""
-        try:
-            if success:
-                # --- Принятие ---
-                # a. Добавить в белый список через RCON
+    async def disable(self):
+        for i in self.children:
+            i.disabled = True
+        if self.message:
+            await self.message.edit(view=self)
+
+    async def finalize(self, channel, success: bool, reason: str = ""):
+
+        await self.disable()
+
+        if success:
+            try:
+                await run_rcon(f'whitelist add {self.data["mc_nickname"]}')
+            except Exception as e:
+                print(f"RCON error: {e}")
+                await safe_dm(self.user, "Ошибка whitelist")
+                return
+
+            await safe_dm(
+                self.user,
+                f"Вы приняты! IP: {SERVER_IP}"
+            )
+
+            member = channel.guild.get_member(self.user.id)
+            if member:
                 try:
-                    with Client(RCON_HOST, RCON_PORT, passwd=RCON_PASS, timeout=5) as client:
-                        response_rcon = client.run(f'whitelist add {self.data["mc_nickname"]}')
-                        print(f"RCON whitelist command response: {response_rcon}") # Лог
-                except Exception as e:
-                    print(f"Ошибка RCON: {e}")
-                    await self.applicant.send("Произошла ошибка при добавлении вас в белый список. Администрация уведомлена.")
-                    await channel.delete()
-                    return # Прервать, не изменяя роль
+                    old = channel.guild.get_role(NEWBIE_ROLE_ID)
+                    new = channel.guild.get_role(PLAYER_ROLE_ID)
 
-                # b. Отправить сообщение пользователю
-                await self.applicant.send(f"Ваша заявка принята! Ваш ник: **{self.data['mc_nickname']}**. IP сервера: **{SERVER_IP}**. Добро пожаловать!")
+                    if old:
+                        await member.remove_roles(old)
+                    if new:
+                        await member.add_roles(new)
+                except discord.Forbidden:
+                    print("Ошибка ролей")
 
-                # c. Изменить роль в гильдии
-                guild = channel.guild
-                member = guild.get_member(self.applicant.id)
-                if member:
-                    old_role = guild.get_role(NEWBIE_ROLE_ID)
-                    new_role = guild.get_role(PLAYER_ROLE_ID)
-                    if old_role:
-                        await member.remove_roles(old_role)
-                    if new_role:
-                        await member.add_roles(new_role)                    print(f"Роль пользователя {self.applicant.name} изменена.")
-                else:
-                    print(f"Пользователь {self.applicant.name} не найден в гильдии.")
-            else:
-                # --- Отказ ---
-                if reason:
-                     await self.applicant.send(f"В вашей заявке отказано. Причина: {reason}")
-                else:
-                     await self.applicant.send("В вашей заявке отказано по техническим причинам.")
+        else:
+            await safe_dm(self.user, f"Отказ: {reason or 'без причины'}")
 
-            # Удаляем канал тикета
+        try:
             await channel.delete()
         except Exception as e:
-            print(f"Ошибка при финализации тикета: {e}")
+            print(f"Ошибка удаления канала: {e}")
+
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await self.finalize(interaction.channel, True)
+
+    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.red)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DeclineModal(self))
 
 
-    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, emoji="✅")
-    async def accept_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Отключаем кнопки
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(view=self)
-        # Завершаем тикет как успешный
-        await self.finalize_ticket(interaction.channel, success=True)
+# ===================== МОДАЛКА ОТКАЗА =====================
 
+class DeclineModal(discord.ui.Modal, title="Причина отказа"):
 
-    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.red, emoji="❌")
-    async def decline_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Создаём модальное окно для ввода причины
-        modal = DeclineReasonModal(self)
-        await interaction.response.send_modal(modal)
+    reason = discord.ui.TextInput(label="Причина", style=discord.TextStyle.paragraph)
 
-class DeclineReasonModal(discord.ui.Modal, title="Причина отказа"):
-    def __init__(self, ticket_view: TicketActionsView):
+    def __init__(self, view: TicketView):
         super().__init__()
-        self.ticket_view = ticket_view
-
-    reason = discord.ui.TextInput(
-        label='Укажите причину отказа',
-        placeholder='Например: неподобающее поведение, спам и т.д.',
-        required=True,
-        style=discord.TextStyle.paragraph,
-        max_length=200
-    )
+        self.view = view
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer() # Откладываем ответ, так как действия могут занять время
-        # Отключаем кнопки в родительском View
-        for item in self.ticket_view.children:
-            item.disabled = True        # Обновляем сообщение, чтобы кнопки стали неактивны
-        await interaction.followup.edit_message(message_id=interaction.message.id, view=self.ticket_view)
-        # Завершаем тикет с отказом
-        await self.ticket_view.finalize_ticket(interaction.channel, success=False, reason=self.reason.value)
+        await interaction.response.defer()
+        await self.view.finalize(interaction.channel, False, self.reason.value)
 
+
+# ===================== КНОПКА =====================
 
 class ApplyView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None) # Кнопка всегда активна
 
-    @discord.ui.button(label="Подать заявку", style=discord.ButtonStyle.primary, emoji="📝")
-    async def apply_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        modal = ApplicationModal()
-        await interaction.response.send_modal(modal)
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Подать заявку", style=discord.ButtonStyle.primary)
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ApplicationModal())
+
+
+# ===================== EVENTS =====================
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} успешно подключен как бот.')
-    # Регистрация представления для постоянной кнопки
+    print(f"Logged in as {bot.user}")
     bot.add_view(ApplyView())
 
-@bot.command(name='send_apply_msg')
-@commands.has_permissions(administrator=True) # Только администратор может отправить
-async def send_apply_message(ctx):
-    view = ApplyView()
+
+# ===================== КОМАНДА =====================
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def apply(ctx):
     embed = discord.Embed(
-        title="Хочешь на наш сервер?",
-        description="Нажми кнопку ниже, чтобы подать заявку!",
+        title="Заявка",
+        description="Нажмите кнопку",
         color=0x00ff00
     )
-    await ctx.send(embed=embed, view=view)
-    await ctx.message.delete() # Удалить команду администратора
+    await ctx.send(embed=embed, view=ApplyView())
+    await ctx.message.delete()
+
 
 bot.run(TOKEN)
