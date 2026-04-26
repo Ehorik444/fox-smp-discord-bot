@@ -4,3 +4,4 @@ mcrcon
 asyncpg
 aiohttp
 matplotlib
+openai
