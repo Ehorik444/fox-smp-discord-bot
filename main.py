@@ -1,23 +1,35 @@
-import os
 import discord
 from discord import app_commands
 from discord.ui import Button, View, Modal, TextInput
-from dotenv import load_dotenv
 from mcrcon import MCRcon
 from openai import OpenAI
 
-load_dotenv()
+# =======================
+# ВСТАВЬ СЮДА ДАННЫЕ
+# =======================
+
+DISCORD_TOKEN = "MTIyMDQ0MjA5ODA4MDE1MzY5Mg.GZh0Wn.G4zd3ZdXYwWZp6wlVR38ulrXHpjkg98uIqnF3Y"
+OPENAI_API_KEY = "ТВОЙ_OPENAI_KEY"
+
+RCON_HOST = "127.0.0.1"
+RCON_PORT = 25575
+RCON_PASSWORD = "password"
+
+SERVER_IP = "play.server.net"
+
+# =======================
 
 client = discord.Client(intents=discord.Intents.all())
 tree = app_commands.CommandTree(client)
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ----------- AI проверка заявки -----------
+# -------- AI проверка --------
 def check_application(data: str):
     prompt = f"""
-Ты модератор Minecraft сервера. Оцени заявку и ответь строго в формате:
+Ты модератор Minecraft сервера.
 
+Ответь строго:
 ACCEPT или REJECT
 Причина: ...
 
@@ -37,8 +49,8 @@ ACCEPT или REJECT
     return False, text
 
 
-# ----------- Modal форма -----------
-class ApplyModal(Modal, title="Заявка на сервер"):
+# -------- Форма --------
+class ApplyModal(Modal, title="Заявка"):
     nick = TextInput(label="Ник Minecraft")
     age = TextInput(label="Возраст")
     source = TextInput(label="Откуда узнали?")
@@ -54,33 +66,29 @@ class ApplyModal(Modal, title="Заявка на сервер"):
 О себе: {self.about}
 """
 
-        await interaction.response.send_message("⏳ Заявка отправлена на рассмотрение...", ephemeral=True)
+        await interaction.response.send_message("⏳ Проверяем заявку...", ephemeral=True)
 
         accepted, reason = check_application(data)
 
         if accepted:
-            # --- RCON ---
-            with MCRcon(
-                os.getenv("RCON_HOST"),
-                os.getenv("RCON_PASSWORD"),
-                port=int(os.getenv("RCON_PORT"))
-            ) as mcr:
-                mcr.command(f"whitelist add {self.nick}")
+            try:
+                with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
+                    mcr.command(f"whitelist add {self.nick}")
+            except Exception as e:
+                print("RCON ERROR:", e)
 
-            # --- роли ---
-            role = discord.utils.get(interaction.guild.roles, name="Игрок")
-            old_role = discord.utils.get(interaction.guild.roles, name="Новичок")
+            role_new = discord.utils.get(interaction.guild.roles, name="Игрок")
+            role_old = discord.utils.get(interaction.guild.roles, name="Новичок")
 
-            if role:
-                await interaction.user.add_roles(role)
-            if old_role:
-                await interaction.user.remove_roles(old_role)
+            if role_new:
+                await interaction.user.add_roles(role_new)
+            if role_old:
+                await interaction.user.remove_roles(role_old)
 
-            # --- ЛС ---
             await interaction.user.send(
                 f"✅ Заявка принята!\n"
                 f"Ник: {self.nick}\n"
-                f"IP: {os.getenv('SERVER_IP')}"
+                f"IP: {SERVER_IP}"
             )
 
         else:
@@ -89,7 +97,7 @@ class ApplyModal(Modal, title="Заявка на сервер"):
             )
 
 
-# ----------- Кнопка -----------
+# -------- Кнопка --------
 class ApplyView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -99,20 +107,20 @@ class ApplyView(View):
         await interaction.response.send_modal(ApplyModal())
 
 
-# ----------- Команда -----------
-@tree.command(name="applypanel", description="Создать панель заявок")
+# -------- Команда --------
+@tree.command(name="applypanel", description="Панель заявок")
 async def applypanel(interaction: discord.Interaction):
     await interaction.response.send_message(
-        "Нажмите кнопку ниже, чтобы подать заявку:",
+        "Нажми кнопку ниже, чтобы подать заявку:",
         view=ApplyView()
     )
 
 
-# ----------- Запуск -----------
+# -------- Запуск --------
 @client.event
 async def on_ready():
     await tree.sync()
     print(f"Бот запущен как {client.user}")
 
 
-client.run(os.getenv("DISCORD_TOKEN"))
+client.run(DISCORD_TOKEN)
