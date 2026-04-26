@@ -76,7 +76,7 @@ class ApplicationModal(discord.ui.Modal, title='Заявка на сервер')
         # Запуск создания тикета в фоне
         asyncio.create_task(create_ticket(interaction.user, application_data))
 
-async def create_ticket(user: discord.User, data: dict):
+async def create_ticket(user: discord.User,  dict):
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         print("Гильдия не найдена.")
@@ -112,7 +112,7 @@ async def create_ticket(user: discord.User, data: dict):
     # await message.pin()
 
 class TicketActionsView(discord.ui.View):
-    def __init__(self, applicant: discord.User, data: dict):
+    def __init__(self, applicant: discord.User,  dict):
         super().__init__(timeout=None) # Кнопки всегда активны
         self.applicant = applicant
         self.data = data
