@@ -2,12 +2,12 @@ import os
 import asyncio
 import discord
 from discord.ext import commands, tasks
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View
 from dotenv import load_dotenv
 import logging
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -24,182 +24,153 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-class ApplicationModal(Modal, title="📋 Заявка на Fox SMP"):
-    """Модальное окно для подачи заявки на сервер"""
-    
-    nickname = TextInput(
-        label="Ваш ник в Minecraft",
-        placeholder="Введите ваш ник",
-        required=True,
-        min_length=3,
-        max_length=16
-    )
-    
-    age = TextInput(
-        label="Ваш возраст",
-        placeholder="Введите возраст (8-100)",
-        required=True,
-        min_length=1,
-        max_length=3
-    )
-    
-    source = TextInput(
-        label="Откуда вы узнали о сервере?",
-        placeholder="YouTube, друг, ВКонтакте и т.д.",
-        required=True,
-        min_length=3,
-        max_length=100
-    )
-    
-    friend_nick = TextInput(
-        label="Ник друга (для розыгрышей)",
-        placeholder="Если нет - напишите 'Нет'",
-        required=True,
-        min_length=2,
-        max_length=50
-    )
-    
-    about = TextInput(
-        label="О себе",
-        placeholder="Расскажите немного о себе, ваши интересы в Майнкрафте...",
-        style=discord.TextStyle.long,
-        required=True,
-        min_length=10,
-        max_length=500
-    )
+# ============================================================
+# СИСТЕМА ЗАЯВОК (ФОРМА ЧЕРЕЗ СООБЩЕНИЯ)
+# ============================================================
 
-    async def on_submit(self, interaction: discord.Interaction):
-        """Обработка отправки заявки"""
-        try:
-            # Валидация возраста
-            try:
-                age_value = int(self.age.value)
-                if age_value < 8 or age_value > 100:
-                    await interaction.response.send_message(
-                        "❌ Возраст должен быть от 8 до 100 лет!",
-                        ephemeral=True
-                    )
-                    return
-            except ValueError:
-                await interaction.response.send_message(
-                    "❌ Возраст должен быть числом!",
-                    ephemeral=True
-                )
-                return
-
-            channel = bot.get_channel(CHANNEL_ID)
-            
-            if not channel:
-                logger.error(f"Канал {CHANNEL_ID} не найден")
-                await interaction.response.send_message(
-                    "❌ Ошибка: канал не найден. Обратитесь к администратору.",
-                    ephemeral=True
-                )
-                return
-
-            # Создание эмбеда с информацией о заявке
-            embed = discord.Embed(
-                title="📋 Новая заявка на Fox SMP",
-                color=discord.Color.from_rgb(0, 255, 136),
-                timestamp=discord.utils.utcnow()
-            )
-            
-            embed.add_field(
-                name="🎮 Ник в Minecraft",
-                value=f"`{self.nickname.value}`",
-                inline=False
-            )
-            
-            embed.add_field(
-                name="🎂 Возраст",
-                value=f"`{age_value} лет`",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📢 Источник информации",
-                value=f"`{self.source.value}`",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="👥 Ник друга",
-                value=f"`{self.friend_nick.value}`",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="ℹ️ О себе",
-                value=self.about.value,
-                inline=False
-            )
-            
-            embed.add_field(
-                name="👤 Подал заявку",
-                value=f"{interaction.user.mention} ({interaction.user.name}#{interaction.user.discriminator})",
-                inline=False
-            )
-            
-            embed.set_footer(
-                text="Fox SMP | Заявка получена",
-                icon_url=interaction.user.avatar.url if interaction.user.avatar else None
-            )
-
-            # Отправка заявки в канал модераторов
-            await channel.send(embed=embed)
-            
-            # Отправка подтверждения пользователю
-            await interaction.response.send_message(
-                "✅ **Спасибо за вашу заявку!**\n\n"
-                "Ваша заявка успешно отправлена на рассмотрение.\n"
-                "Администраторы ответят вам в течение 24 часов.",
-                ephemeral=True
-            )
-            
-            logger.info(f"Новая заявка от {interaction.user.name}: {self.nickname.value}")
-            
-        except asyncio.TimeoutError:
-            logger.error("Timeout при обработке заявки")
-            try:
-                await interaction.response.send_message(
-                    "❌ Время ожидания истекло. Попробуйте позже.",
-                    ephemeral=True
-                )
-            except:
-                pass
-        except Exception as e:
-            logger.error(f"Ошибка при обработке заявки: {e}", exc_info=True)
-            try:
-                await interaction.response.send_message(
-                    "❌ Произошла ошибка при отправке заявки. Попробуйте позже.",
-                    ephemeral=True
-                )
-            except:
-                pass
-
-
-class ApplyView(View):
-    """Виджет с кнопкой для открытия заявки"""
+class ApplicationView(View):
+    """Кнопки для заявки"""
     
     def __init__(self):
         super().__init__(timeout=None)
+        self.applications = {}  # Хранение данных заявок
 
-    @discord.ui.button(
-        label="📝 Подать заявку",
-        style=discord.ButtonStyle.green,
-        emoji="📋"
-    )
+    @discord.ui.button(label="📝 Подать заявку", style=discord.ButtonStyle.green, custom_id="apply_button")
     async def apply_button(self, interaction: discord.Interaction, button: Button):
-        """Кнопка для открытия модального окна"""
+        """Кнопка для открытия формы заявки"""
         try:
-            await interaction.response.send_modal(ApplicationModal())
-        except Exception as e:
-            logger.error(f"Ошибка при открытии модального окна: {e}")
+            # Отправляем DM пользователю для заполнения формы
+            embed = discord.Embed(
+                title="📋 Форма заявки на Fox SMP",
+                description="Ответьте на вопросы в этом чате.\nУ вас есть 5 минут на ответ.",
+                color=discord.Color.from_rgb(0, 255, 136)
+            )
+            embed.add_field(name="❓ Вопрос 1", value="Какой ваш ник в Minecraft? (3-16 символов)", inline=False)
+            
+            await interaction.user.send(embed=embed)
+            
+            # Начинаем сбор данных
             await interaction.response.send_message(
-                "❌ Ошибка при открытии формы. Попробуйте позже.",
+                "✅ Форма заявки отправлена вам в Direct Message!",
                 ephemeral=True
             )
+            
+            # Функция для получения ответа
+            def check(msg):
+                return msg.author == interaction.user and isinstance(msg.channel, discord.DMChannel)
+            
+            # Собираем ответы
+            application_data = {}
+            questions = [
+                ("Какой ваш ник в Minecraft? (3-16 символов)", "nickname", 3, 16),
+                ("Сколько вам лет? (8-100)", "age", None, None),
+                ("Откуда вы узнали о сервере?", "source", 3, 100),
+                ("Ник вашего друга (или напишите 'Нет')", "friend", 2, 50),
+                ("Расскажите о себе и ваших интересах в Майнкрафте", "about", 10, 500),
+            ]
+            
+            for i, (question, key, min_len, max_len) in enumerate(questions, 1):
+                try:
+                    embed = discord.Embed(
+                        title=f"❓ Вопрос {i}/{len(questions)}",
+                        description=question,
+                        color=discord.Color.from_rgb(0, 255, 136)
+                    )
+                    await interaction.user.send(embed=embed)
+                    
+                    # Получаем ответ
+                    try:
+                        msg = await bot.wait_for('message', check=check, timeout=300)
+                        answer = msg.content.strip()
+                        
+                        # Валидация
+                        if key == "age":
+                            try:
+                                age = int(answer)
+                                if age < 8 or age > 100:
+                                    await interaction.user.send(
+                                        "❌ Возраст должен быть от 8 до 100 лет. Попробуйте ещё раз."
+                                    )
+                                    i -= 1
+                                    continue
+                                application_data[key] = str(age)
+                            except ValueError:
+                                await interaction.user.send("❌ Возраст должен быть числом. Попробуйте ещё раз.")
+                                i -= 1
+                                continue
+                        elif min_len and max_len:
+                            if len(answer) < min_len or len(answer) > max_len:
+                                await interaction.user.send(
+                                    f"❌ Ответ должен быть от {min_len} до {max_len} символов. Попробуйте ещё раз."
+                                )
+                                i -= 1
+                                continue
+                        
+                        application_data[key] = answer
+                        await msg.add_reaction("✅")
+                        
+                    except asyncio.TimeoutError:
+                        await interaction.user.send("⏱️ Время ожидания истекло. Пожалуйста, начните заново.")
+                        return
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка в вопросе {i}: {e}")
+                    continue
+            
+            # Отправляем заявку в канал модераторов
+            if len(application_data) == len(questions):
+                embed = discord.Embed(
+                    title="📋 Новая заявка на Fox SMP",
+                    color=discord.Color.from_rgb(0, 255, 136),
+                    timestamp=discord.utils.utcnow()
+                )
+                
+                embed.add_field(name="🎮 Ник Minecraft", value=f"`{application_data.get('nickname', 'N/A')}`", inline=False)
+                embed.add_field(name="🎂 Возраст", value=f"`{application_data.get('age', 'N/A')} лет`", inline=True)
+                embed.add_field(name="📢 Источник", value=f"`{application_data.get('source', 'N/A')}`", inline=True)
+                embed.add_field(name="👥 Ник друга", value=f"`{application_data.get('friend', 'N/A')}`", inline=True)
+                embed.add_field(name="ℹ️ О себе", value=application_data.get('about', 'N/A'), inline=False)
+                embed.add_field(name="👤 От", value=f"{interaction.user.mention} ({interaction.user.name}#{interaction.user.discriminator})", inline=False)
+                
+                embed.set_footer(text="Fox SMP | Заявка получена")
+                
+                channel = bot.get_channel(CHANNEL_ID)
+                if channel:
+                    # Отправляем заявку
+                    msg = await channel.send(embed=embed)
+                    
+                    # Добавляем кнопки для модераторов
+                    approve_button = Button(label="✅ Одобрить", style=discord.ButtonStyle.green, custom_id=f"approve_{msg.id}")
+                    reject_button = Button(label="❌ Отклонить", style=discord.ButtonStyle.red, custom_id=f"reject_{msg.id}")
+                    
+                    view = View()
+                    view.add_item(approve_button)
+                    view.add_item(reject_button)
+                    
+                    await msg.edit(view=view)
+                    logger.info(f"✅ Заявка отправлена: {application_data.get('nickname')}")
+                
+                # Подтверждение пользователю
+                confirm_embed = discord.Embed(
+                    title="✅ Спасибо за вашу заявку!",
+                    description="Ваша заявка успешно отправлена на рассмотрение.\n\nАдминистраторы ответят вам в течение 24 часов.",
+                    color=discord.Color.from_rgb(0, 255, 136)
+                )
+                await interaction.user.send(embed=confirm_embed)
+            else:
+                await interaction.user.send("❌ Не удалось собрать все данные заявки. Пожалуйста, начните заново.")
+                
+        except Exception as e:
+            logger.error(f"Ошибка в apply_button: {e}", exc_info=True)
+            try:
+                await interaction.response.send_message("❌ Ошибка при открытии формы. Попробуйте позже.", ephemeral=True)
+            except:
+                pass
 
+
+# ============================================================
+# СОБЫТИЯ БОТА
+# ============================================================
 
 @bot.event
 async def on_ready():
@@ -215,15 +186,9 @@ async def on_ready():
     except Exception as e:
         logger.error(f"❌ Ошибка при синхронизации команд: {e}")
     
-    # Запуск задачи мониторинга
+    # Запускаем проверку соединения
     if not check_connection.is_running():
         check_connection.start()
-
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    """Глобальная обработка ошибок"""
-    logger.error(f"Ошибка в событии {event}:", exc_info=True)
 
 
 @bot.event
@@ -237,8 +202,7 @@ async def check_connection():
     """Проверка подключения каждые 5 минут"""
     try:
         if bot.is_closed():
-            logger.error("❌ Соединение потеряно! Переподключение...")
-            await bot.close()
+            logger.error("❌ Соединение потеряно!")
         else:
             logger.info("✅ Бот онлайн и работает нормально")
     except Exception as e:
@@ -247,15 +211,19 @@ async def check_connection():
 
 @check_connection.before_loop
 async def before_check_connection():
-    """Ожидание готовности бота перед началом проверок"""
+    """Ожидание готовности бота"""
     await bot.wait_until_ready()
 
+
+# ============================================================
+# КОМАНДЫ БОТА
+# ============================================================
 
 @bot.command(name="apply", description="Отправить кнопку заявки")
 async def apply_command(ctx):
     """Команда для отправки кнопки заявки"""
     try:
-        view = ApplyView()
+        view = ApplicationView()
         embed = discord.Embed(
             title="📋 Подать заявку на Fox SMP",
             description="Нажмите кнопку ниже, чтобы заполнить заявку на присоединение к нашему серверу.",
@@ -270,10 +238,9 @@ async def apply_command(ctx):
                   "• Небольшое описание о себе",
             inline=False
         )
-        embed.set_color(discord.Color.from_rgb(0, 255, 136))
         
         await ctx.send(embed=embed, view=view)
-        logger.info(f"Команда !apply выполнена пользователем {ctx.author.name}")
+        logger.info(f"✅ Команда !apply выполнена пользователем {ctx.author.name}")
     except Exception as e:
         logger.error(f"Ошибка в команде apply: {e}")
         await ctx.send("❌ Ошибка при отправке панели заявок")
@@ -283,7 +250,7 @@ async def apply_command(ctx):
 async def setup_command(ctx):
     """Команда для установки панели заявок"""
     try:
-        view = ApplyView()
+        view = ApplicationView()
         embed = discord.Embed(
             title="🎮 Fox SMP - Система приёма заявок",
             description="Заинтересованы присоединиться к нашему сообществу?",
@@ -291,7 +258,7 @@ async def setup_command(ctx):
         )
         embed.add_field(
             name="🚀 Как подать заявку?",
-            value="Нажмите кнопку **'📝 Подать заявку'** и заполните форму",
+            value="Нажмите кнопку **'📝 Подать заявку'** и ответьте на вопросы в Direct Message",
             inline=False
         )
         embed.add_field(
@@ -308,7 +275,7 @@ async def setup_command(ctx):
         )
         
         await ctx.send(embed=embed, view=view)
-        logger.info(f"Команда !setup выполнена пользователем {ctx.author.name}")
+        logger.info(f"✅ Команда !setup выполнена пользователем {ctx.author.name}")
     except Exception as e:
         logger.error(f"Ошибка в команде setup: {e}")
         await ctx.send("❌ Ошибка при установке панели заявок")
@@ -331,13 +298,17 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ У вас нет прав для выполнения этой команды!")
     elif isinstance(error, commands.CommandNotFound):
-        pass  # Игнорировать несуществующие команды
+        pass
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("❌ Команда требует дополнительные аргументы")
     else:
         logger.error(f"Ошибка команды: {error}", exc_info=True)
         await ctx.send(f"❌ Произошла ошибка: {error}")
 
+
+# ============================================================
+# ЗАПУСК БОТА С АВТОПЕРЕПОДКЛЮЧЕНИЕМ
+# ============================================================
 
 async def main():
     """Главная функция с обработкой переподключения"""
@@ -353,7 +324,7 @@ async def main():
             return
         except Exception as e:
             retry_count += 1
-            wait_time = min(60 * retry_count, 300)  # Максимум 5 минут
+            wait_time = min(60 * retry_count, 300)
             logger.error(f"❌ Бот упал! Попытка переподключения {retry_count}/{max_retries} через {wait_time}с")
             logger.error(f"Ошибка: {e}", exc_info=True)
             await asyncio.sleep(wait_time)
