@@ -9,6 +9,7 @@ from chat_bridge import discord_to_mc, minecraft_to_discord
 from systems.apply import create_application
 from systems.report import create_report
 from systems.verify import start_verification
+from utils.interaction_safe import safe_slash
 
 # ---------------- ENV ----------------
 load_dotenv()
@@ -28,7 +29,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ======================================================
-# 🧾 MODAL (ЗАЯВКА)
+# 🧾 APPLY MODAL
 # ======================================================
 class ApplyModal(discord.ui.Modal, title="Заявка на SMP сервер"):
 
@@ -62,7 +63,7 @@ class ApplyModal(discord.ui.Modal, title="Заявка на SMP сервер"):
         )
 
 # ======================================================
-# 🔘 КНОПКА ПОДАЧИ ЗАЯВКИ
+# 🔘 APPLY BUTTON
 # ======================================================
 class ApplyView(discord.ui.View):
     def __init__(self):
@@ -92,6 +93,7 @@ async def on_ready():
 
     bot.loop.create_task(mc_loop())
 
+
 @bot.event
 async def on_message(message):
     try:
@@ -105,45 +107,57 @@ async def on_message(message):
         traceback.print_exc()
 
 # ======================================================
-# MC LOOP
+# MC LOOP (NO SPAM FIXED IN chat_bridge)
 # ======================================================
 async def mc_loop():
     await bot.wait_until_ready()
 
+    print("MC LOOP STARTED")
+
     while not bot.is_closed():
         try:
             await minecraft_to_discord(bot, CHANNEL_ID)
-        except:
+
+        except Exception:
             traceback.print_exc()
 
         await asyncio.sleep(5)
 
 # ======================================================
-# SLASH COMMANDS (РУССКИЕ)
+# SLASH COMMANDS (ANTI-TIMEOUT SYSTEM)
 # ======================================================
 
 @bot.tree.command(name="apply", description="Подать заявку на SMP сервер")
 async def apply(interaction: discord.Interaction, nickname: str, reason: str):
-    create_application(interaction.user.id, nickname, reason)
-    await interaction.response.send_message("🧾 Заявка отправлена!", ephemeral=True)
+
+    async def logic():
+        create_application(interaction.user.id, nickname, reason)
+        return "🧾 Ваша заявка отправлена!"
+
+    await safe_slash(interaction, logic)
 
 
 @bot.tree.command(name="report", description="Пожаловаться на игрока")
 async def report(interaction: discord.Interaction, target: str, reason: str):
-    create_report(interaction.user.name, target, reason)
-    await interaction.response.send_message("🚨 Жалоба отправлена!", ephemeral=True)
+
+    async def logic():
+        create_report(interaction.user.name, target, reason)
+        return "🚨 Жалоба отправлена!"
+
+    await safe_slash(interaction, logic)
 
 
 @bot.tree.command(name="verify", description="Привязать Minecraft аккаунт")
 async def verify(interaction: discord.Interaction, mc_name: str):
-    code = await start_verification(interaction.user.id, mc_name)
-    await interaction.response.send_message(
-        f"🔐 Код отправлен в Minecraft: {code}",
-        ephemeral=True
-    )
+
+    async def logic():
+        code = await start_verification(interaction.user.id, mc_name)
+        return f"🔐 Код отправлен в Minecraft: {code}"
+
+    await safe_slash(interaction, logic)
 
 # ======================================================
-# АДМИН ПАНЕЛЬ
+# ADMIN PANEL
 # ======================================================
 
 @bot.tree.command(name="панель_заявок", description="Создать панель заявок")
