@@ -2,12 +2,11 @@ import os
 import asyncio
 import traceback
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from chat_bridge import discord_to_mc, minecraft_to_discord
-
-# SMP SYSTEMS
 from systems.apply import create_application
 from systems.report import create_report
 from systems.verify import start_verification
@@ -19,14 +18,44 @@ TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 
 if not TOKEN:
-    raise ValueError("TOKEN missing in .env")
+    raise ValueError("TOKEN missing")
 
 # ---------------- BOT ----------------
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="/", intents=intents)
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ---------------- CHAT DISCORD -> MC ----------------
+# ---------------- SYNC SLASH COMMANDS ----------------
+@bot.event
+async def on_ready():
+    print(f"✅ BOT ONLINE: {bot.user}")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔁 Slash commands synced: {len(synced)}")
+    except Exception as e:
+        print("Sync error:", e)
+
+    bot.loop.create_task(mc_loop())
+
+
+# ---------------- MC LOOP ----------------
+async def mc_loop():
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        try:
+            await minecraft_to_discord(bot, CHANNEL_ID)
+        except:
+            traceback.print_exc()
+
+        await asyncio.sleep(5)
+
+
+# ---------------- CHAT (Discord -> MC) ----------------
 @bot.event
 async def on_message(message):
     try:
@@ -36,77 +65,48 @@ async def on_message(message):
         await discord_to_mc(message)
         await bot.process_commands(message)
 
-    except Exception:
-        print("on_message ERROR")
+    except:
         traceback.print_exc()
 
 
-# ---------------- MC LOOP ----------------
-async def mc_loop():
-    await bot.wait_until_ready()
+# ======================================================
+# 🧾 SLASH COMMANDS
+# ======================================================
 
-    print("MC LOOP STARTED")
-
-    while not bot.is_closed():
-        try:
-            await minecraft_to_discord(bot, CHANNEL_ID)
-
-        except Exception:
-            print("MC LOOP ERROR")
-            traceback.print_exc()
-
-        await asyncio.sleep(5)
-
-
-# ---------------- READY ----------------
-@bot.event
-async def on_ready():
-    print(f"✅ SMP BOT ONLINE: {bot.user}")
-
-    bot.loop.create_task(mc_loop())
-
-
-# ---------------- COMMANDS ----------------
-
-# 🧾 APPLY
-@bot.command()
-async def apply(ctx, nickname: str, *, reason: str):
+# APPLY
+@bot.tree.command(name="apply", description="Apply for SMP server")
+async def apply(interaction: discord.Interaction, nickname: str, reason: str):
     try:
-        create_application(ctx.author.id, nickname, reason)
-        await ctx.send("🧾 Application sent!")
-    except Exception:
+        create_application(interaction.user.id, nickname, reason)
+        await interaction.response.send_message("🧾 Application submitted!", ephemeral=True)
+    except:
         traceback.print_exc()
-        await ctx.send("❌ Error while sending application")
+        await interaction.response.send_message("❌ Error", ephemeral=True)
 
 
-# 🚨 REPORT
-@bot.command()
-async def report(ctx, target: str, *, reason: str):
+# REPORT
+@bot.tree.command(name="report", description="Report a player")
+async def report(interaction: discord.Interaction, target: str, reason: str):
     try:
-        create_report(ctx.author.name, target, reason)
-        await ctx.send("🚨 Report submitted!")
-    except Exception:
+        create_report(interaction.user.name, target, reason)
+        await interaction.response.send_message("🚨 Report sent!", ephemeral=True)
+    except:
         traceback.print_exc()
-        await ctx.send("❌ Error while reporting")
+        await interaction.response.send_message("❌ Error", ephemeral=True)
 
 
-# 🔐 VERIFY
-@bot.command()
-async def verify(ctx, mc_name: str):
+# VERIFY
+@bot.tree.command(name="verify", description="Link Minecraft account")
+async def verify(interaction: discord.Interaction, mc_name: str):
     try:
-        code = await start_verification(ctx.author.id, mc_name)
-        await ctx.send(f"🔐 Code sent to Minecraft: `{code}`")
-    except Exception:
+        code = await start_verification(interaction.user.id, mc_name)
+        await interaction.response.send_message(
+            f"🔐 Your code was sent in Minecraft: `{code}`",
+            ephemeral=True
+        )
+    except:
         traceback.print_exc()
-        await ctx.send("❌ Verification error")
-
-
-# ---------------- GLOBAL ERROR HANDLER ----------------
-def handle_exception(loop, context):
-    print("GLOBAL ERROR:", context)
-
-
-asyncio.get_event_loop().set_exception_handler(handle_exception)
+        await interaction.response.send_message("❌ Error", ephemeral=True)
 
 
 # ---------------- RUN ----------------
