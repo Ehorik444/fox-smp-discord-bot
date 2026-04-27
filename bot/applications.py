@@ -18,42 +18,56 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
+        try:
+            channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
 
-        embed = discord.Embed(
-            title="📩 Новая заявка",
-            color=0xfe8b29
-        )
+            embed = discord.Embed(
+                title="📩 Новая заявка",
+                color=0xfe8b29
+            )
 
-        embed.add_field(name="Ник", value=self.nickname.value)
-        embed.add_field(name="Возраст", value=self.age.value)
-        embed.add_field(name="Источник", value=self.source.value)
-        embed.add_field(name="Друг", value=self.friend.value or "Нет")
-        embed.add_field(name="О себе", value=self.about.value)
+            embed.add_field(name="Ник", value=self.nickname.value)
+            embed.add_field(name="Возраст", value=self.age.value)
+            embed.add_field(name="Источник", value=self.source.value)
+            embed.add_field(name="Друг", value=self.friend.value or "Нет")
+            embed.add_field(name="О себе", value=self.about.value)
 
-        await channel.send(embed=embed)
+            if channel:
+                await channel.send(embed=embed)
 
-        await interaction.response.send_message("✅ Отправлено", ephemeral=True)
+            await interaction.response.send_message(
+                "✅ Заявка отправлена!",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            print("Modal error:", e)
 
 # =========================
-# VIEW (кнопка создания заявки)
+# PERSISTENT VIEW
 # =========================
 
 class ApplicationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="📩 Подать заявку", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="📩 Подать заявку",
+        style=discord.ButtonStyle.success,
+        custom_id="apply_button"  # 🔥 КЛЮЧЕВОЕ
+    )
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ApplicationModal())
 
 # =========================
-# COMMAND
+# COG
 # =========================
 
 class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="заявка")
+    @commands.hybrid_command(name="заявка", description="Создать сообщение с заявкой")
     async def send_application_panel(self, ctx):
 
         embed = discord.Embed(
@@ -64,6 +78,12 @@ class Applications(commands.Cog):
 
         await ctx.send(embed=embed, view=ApplicationView())
 
+# =========================
+# SETUP
+# =========================
 
 async def setup(bot):
     await bot.add_cog(Applications(bot))
+
+    # 🔥 РЕГИСТРАЦИЯ PERSISTENT VIEW
+    bot.add_view(ApplicationView())
