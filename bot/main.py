@@ -2,7 +2,6 @@ import os
 import asyncio
 import traceback
 import discord
-from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -29,21 +28,22 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ======================================================
-# 🧾 APPLY MODAL
+# 🔘 APPLY PANEL
 # ======================================================
+
 class ApplyModal(discord.ui.Modal, title="SMP Application"):
 
     nickname = discord.ui.TextInput(label="Minecraft Nick")
     age = discord.ui.TextInput(label="Age")
     source = discord.ui.TextInput(label="How did you find us?")
-    friend = discord.ui.TextInput(label="Friend nick (optional)", required=False)
+    friend = discord.ui.TextInput(label="Friend (optional)", required=False)
     about = discord.ui.TextInput(label="About you", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         channel = bot.get_channel(APPLICATION_CHANNEL_ID)
 
         embed = discord.Embed(
-            title="📩 New SMP Application",
+            title="📩 New Application",
             color=0x00ff00
         )
 
@@ -53,23 +53,19 @@ class ApplyModal(discord.ui.Modal, title="SMP Application"):
         embed.add_field(name="Friend", value=self.friend.value or "None", inline=False)
         embed.add_field(name="About", value=self.about.value, inline=False)
 
-        embed.set_footer(text=f"User: {interaction.user}")
-
         await channel.send(embed=embed)
 
         await interaction.response.send_message(
-            "✅ Application sent!",
+            "✅ Sent!",
             ephemeral=True
         )
 
-# ======================================================
-# 🔘 APPLY BUTTON VIEW
-# ======================================================
+
 class ApplyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📩 Apply for SMP", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="📩 Apply", style=discord.ButtonStyle.green)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ApplyModal())
 
@@ -79,15 +75,16 @@ class ApplyView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    print(f"✅ BOT ONLINE: {bot.user}")
+    print(f"✅ Logged in as {bot.user}")
 
     try:
-        synced = await bot.tree.sync()
-        print(f"🔁 Slash synced: {len(synced)} commands")
+        await bot.tree.sync()
+        print("🔁 Slash commands synced")
     except Exception as e:
         print("Sync error:", e)
 
     bot.loop.create_task(mc_loop())
+
 
 @bot.event
 async def on_message(message):
@@ -96,14 +93,16 @@ async def on_message(message):
             return
 
         await discord_to_mc(message)
+
         await bot.process_commands(message)
 
     except Exception:
         traceback.print_exc()
 
 # ======================================================
-# MC LOOP (FIXED NO SPAM)
+# MC LOOP (SAFE - NO SPAM CONTROL HERE)
 # ======================================================
+
 async def mc_loop():
     await bot.wait_until_ready()
 
@@ -122,23 +121,25 @@ async def mc_loop():
 # SLASH COMMANDS
 # ======================================================
 
-@bot.tree.command(name="apply", description="Apply for SMP server")
+@bot.tree.command(name="apply", description="Apply to SMP")
 async def apply(interaction: discord.Interaction, nickname: str, reason: str):
     try:
         create_application(interaction.user.id, nickname, reason)
-        await interaction.response.send_message("🧾 Application saved!", ephemeral=True)
+        await interaction.response.send_message("🧾 Saved", ephemeral=True)
     except:
         traceback.print_exc()
 
-@bot.tree.command(name="report", description="Report a player")
+
+@bot.tree.command(name="report", description="Report player")
 async def report(interaction: discord.Interaction, target: str, reason: str):
     try:
         create_report(interaction.user.name, target, reason)
-        await interaction.response.send_message("🚨 Report sent!", ephemeral=True)
+        await interaction.response.send_message("🚨 Sent", ephemeral=True)
     except:
         traceback.print_exc()
 
-@bot.tree.command(name="verify", description="Link Minecraft account")
+
+@bot.tree.command(name="verify", description="Link MC account")
 async def verify(interaction: discord.Interaction, mc_name: str):
     try:
         code = await start_verification(interaction.user.id, mc_name)
@@ -147,7 +148,7 @@ async def verify(interaction: discord.Interaction, mc_name: str):
         traceback.print_exc()
 
 # ======================================================
-# ADMIN PANEL COMMAND
+# ADMIN PANEL
 # ======================================================
 
 @bot.tree.command(name="setup_apply_panel", description="Create apply panel")
@@ -159,7 +160,7 @@ async def setup_apply_panel(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="🎮 SMP Applications",
-        description="Click button to apply",
+        description="Click button below to apply",
         color=0x3498db
     )
 
@@ -170,4 +171,5 @@ async def setup_apply_panel(interaction: discord.Interaction):
 # ======================================================
 # RUN
 # ======================================================
+
 bot.run(TOKEN)
