@@ -1,6 +1,10 @@
 import discord
 from discord.ext import commands
 
+# =========================
+# VIEW
+# =========================
+
 class MainPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -41,24 +45,29 @@ class MainPanelView(discord.ui.View):
             url="https://m.twitch.tv/0_ehorik_0_/"
         ))
 
-    @discord.ui.button(label="📜 Правила", style=discord.ButtonStyle.primary)
-    async def rules(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        embed = discord.Embed(
-            title="📜 Правила FOXSMP",
-            description="Правила сервера открываются тут (можем потом расширить на 2 страницы)",
-            color=0xfe8b29
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
+# =========================
+# COG
+# =========================
 
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="панель")
-    async def panel(self, ctx: commands.Context):
+    @commands.command(name="панель")
+    async def panel_prefix(self, ctx):
+        """prefix версия (!панель)"""
+
+        embed = discord.Embed(
+            title="🎮 FOXSMP PANEL",
+            description="Главная панель сервера",
+            color=0xfe8b29
+        )
+
+        await ctx.send(embed=embed, view=MainPanelView())
+
+    @commands.hybrid_command(name="панель", description="Создать панель сервера")
+    async def panel_slash(self, ctx: commands.Context):
+        """slash версия (/панель)"""
 
         embed = discord.Embed(
             title="🎮 FOXSMP PANEL",
