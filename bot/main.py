@@ -31,7 +31,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ======================================================
 # 🧾 APPLY MODAL
 # ======================================================
-class ApplyModal(discord.ui.Modal, title="Заявка на SMP сервер"):
+class ApplyModal(discord.ui.Modal, title="Заявка на сервер"):
 
     nickname = discord.ui.TextInput(label="Ник в Minecraft")
     age = discord.ui.TextInput(label="Возраст")
@@ -43,7 +43,7 @@ class ApplyModal(discord.ui.Modal, title="Заявка на SMP сервер"):
         channel = bot.get_channel(APPLICATION_CHANNEL_ID)
 
         embed = discord.Embed(
-            title="📩 Новая заявка на SMP сервер",
+            title="📩 Новая заявка на сервер",
             color=0xfe8b29
         )
 
