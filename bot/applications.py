@@ -4,11 +4,21 @@ import os
 import time
 from rcon import run_rcon
 
+# =========================
+# ⚙️ ENV
+# =========================
+
 APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ACCEPT_ROLE_ID = int(os.getenv("ACCEPT_ROLE_ID", "0"))
 
-# 🧠 хранение заявок и кулдауна
+AUTO_NICKNAME = os.getenv("AUTO_NICKNAME", "true").lower() == "true"
+NICK_PREFIX = os.getenv("NICK_PREFIX", "")
+
+# =========================
+# 🧠 STATE
+# =========================
+
 active_applications = set()
 cooldowns = {}
 
@@ -73,7 +83,7 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
         )
 
 # =========================
-# 📩 КНОПКА
+# 📩 КНОПКА ПОДАЧИ
 # =========================
 
 class ApplicationView(discord.ui.View):
@@ -89,73 +99,116 @@ class ApplicationView(discord.ui.View):
         await interaction.response.send_modal(ApplicationModal())
 
 # =========================
-# 🧑‍💼 REVIEW
+# 🧑‍💼 REVIEW (АДМИН)
 # =========================
 
 class ReviewView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.success, custom_id="accept_app")
+    # =========================
+    # ✅ ПРИНЯТЬ
+    # =========================
+    @discord.ui.button(
+        label="✅ Принять",
+        style=discord.ButtonStyle.success,
+        custom_id="accept_app"
+    )
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        embed = interaction.message.embeds[0]
-        user_id = int(embed.footer.text)
-        member = interaction.guild.get_member(user_id)
-        nickname = embed.fields[0].value
+        try:
+            embed = interaction.message.embeds[0]
+            user_id = int(embed.footer.text)
+            member = interaction.guild.get_member(user_id)
+            nickname = embed.fields[0].value
 
-        # 🎮 whitelist
-        run_rcon(f"whitelist add {nickname}")
+            # 🎮 WHITELIST
+            run_rcon(f"whitelist add {nickname}")
 
-        # 🎭 роль
-        role = interaction.guild.get_role(ACCEPT_ROLE_ID)
-        if role and member:
-            await member.add_roles(role)
+            # 🎭 РОЛЬ
+            role = interaction.guild.get_role(ACCEPT_ROLE_ID)
+            if role and member:
+                await member.add_roles(role)
 
-        # убрать из активных
-        active_applications.discard(user_id)
+            # 🧠 убрать из активных
+            active_applications.discard(user_id)
 
-        embed.color = 0x00ff00
-        embed.title = "✅ Заявка принята"
-        await interaction.message.edit(embed=embed, view=None)
+            # =========================
+            # 🆕 АВТО НИК
+            # =========================
+            if AUTO_NICKNAME and member:
+                try:
+                    new_nick = f"{NICK_PREFIX}{nickname}" if NICK_PREFIX else nickname
+                    await member.edit(nick=new_nick)
+                except Exception as e:
+                    print("Nickname error:", e)
 
-        # 📊 лог
-        log = interaction.guild.get_channel(LOG_CHANNEL_ID)
-        if log:
-            await log.send(f"✅ Принят: {member} ({nickname})")
+            # =========================
+            # EMBED UPDATE
+            # =========================
+            embed.color = 0x00ff00
+            embed.title = "✅ Заявка принята"
 
-        if member:
-            try:
-                await member.send("🎉 Ты принят на сервер!")
-            except:
-                pass
+            await interaction.message.edit(embed=embed, view=None)
 
-        await interaction.response.send_message("✅ Готово", ephemeral=True)
+            # 📊 ЛОГ
+            log = interaction.guild.get_channel(LOG_CHANNEL_ID)
+            if log:
+                await log.send(f"✅ Принят: {member} ({nickname})")
 
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger, custom_id="deny_app")
+            # 💬 УВЕДОМЛЕНИЕ
+            if member:
+                try:
+                    await member.send(
+                        f"🎉 Твоя заявка принята!\n"
+                        f"Ник: **{nickname}**"
+                    )
+                except:
+                    pass
+
+            await interaction.response.send_message("✅ Принято", ephemeral=True)
+
+        except Exception as e:
+            print("ACCEPT ERROR:", e)
+            await interaction.response.send_message("❌ Ошибка", ephemeral=True)
+
+    # =========================
+    # ❌ ОТКЛОНИТЬ
+    # =========================
+    @discord.ui.button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.danger,
+        custom_id="deny_app"
+    )
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        embed = interaction.message.embeds[0]
-        user_id = int(embed.footer.text)
-        member = interaction.guild.get_member(user_id)
+        try:
+            embed = interaction.message.embeds[0]
+            user_id = int(embed.footer.text)
+            member = interaction.guild.get_member(user_id)
 
-        active_applications.discard(user_id)
+            active_applications.discard(user_id)
 
-        embed.color = 0xff0000
-        embed.title = "❌ Заявка отклонена"
-        await interaction.message.edit(embed=embed, view=None)
+            embed.color = 0xff0000
+            embed.title = "❌ Заявка отклонена"
 
-        log = interaction.guild.get_channel(LOG_CHANNEL_ID)
-        if log:
-            await log.send(f"❌ Отклонен: {member}")
+            await interaction.message.edit(embed=embed, view=None)
 
-        if member:
-            try:
-                await member.send("❌ Тебя не приняли")
-            except:
-                pass
+            log = interaction.guild.get_channel(LOG_CHANNEL_ID)
+            if log:
+                await log.send(f"❌ Отклонен: {member}")
 
-        await interaction.response.send_message("❌ Готово", ephemeral=True)
+            if member:
+                try:
+                    await member.send("❌ Твоя заявка отклонена")
+                except:
+                    pass
+
+            await interaction.response.send_message("❌ Отклонено", ephemeral=True)
+
+        except Exception as e:
+            print("DENY ERROR:", e)
+            await interaction.response.send_message("❌ Ошибка", ephemeral=True)
 
 # =========================
 # ⚙️ COG
@@ -165,12 +218,13 @@ class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="заявка", description="Создать заявку")
+    # 📩 создать панель заявки
+    @commands.hybrid_command(name="заявка", description="Создать панель заявки")
     async def app_panel(self, ctx):
 
         embed = discord.Embed(
-            title="📩 Заявка",
-            description="Нажми кнопку",
+            title="📩 Заявка на сервер",
+            description="Нажми кнопку ниже",
             color=0xfe8b29
         )
 
@@ -197,5 +251,7 @@ class Applications(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Applications(bot))
+
+    # 🔥 persistent кнопки
     bot.add_view(ApplicationView())
     bot.add_view(ReviewView())
