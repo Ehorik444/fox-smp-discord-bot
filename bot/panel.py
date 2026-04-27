@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 
 # =========================
-# VIEW
+# VIEW (ПАНЕЛЬ КНОПОК)
 # =========================
 
 class MainPanelView(discord.ui.View):
@@ -53,9 +53,12 @@ class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name="панель")
-    async def panel_prefix(self, ctx):
-        """prefix версия (!панель)"""
+    # ⚡ ОДНА команда = slash + prefix одновременно (без дублей)
+    @commands.hybrid_command(
+        name="панель",
+        description="Создать панель сервера"
+    )
+    async def panel(self, ctx: commands.Context):
 
         embed = discord.Embed(
             title="🎮 FOXSMP PANEL",
@@ -65,18 +68,10 @@ class Panel(commands.Cog):
 
         await ctx.send(embed=embed, view=MainPanelView())
 
-    @commands.hybrid_command(name="панель", description="Создать панель сервера")
-    async def panel_slash(self, ctx: commands.Context):
-        """slash версия (/панель)"""
 
-        embed = discord.Embed(
-            title="🎮 FOXSMP PANEL",
-            description="Главная панель сервера",
-            color=0xfe8b29
-        )
-
-        await ctx.send(embed=embed, view=MainPanelView())
-
+# =========================
+# SETUP
+# =========================
 
 async def setup(bot):
     await bot.add_cog(Panel(bot))
