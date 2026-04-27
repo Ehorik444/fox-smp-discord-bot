@@ -1,26 +1,23 @@
-import discord
 from rcon import run_rcon
+import discord
 
-DISCORD_CHANNEL_ID = 123456789  # поставь свой ID
 
-
-# Discord → Minecraft
-async def discord_to_mc(message: discord.Message):
+async def discord_to_mc(message):
     try:
-        if message.author.bot:
-            return
-
-        content = message.content[:200]
-
-        run_rcon(f"say [Discord] {message.author.name}: {content}")
+        run_rcon(f"say [Discord] {message.author.name}: {message.content}")
 
     except Exception as e:
         print("Discord->MC error:", e)
 
 
-# Minecraft → Discord (join/leave через /list)
-async def minecraft_to_discord(bot):
+async def minecraft_to_discord(bot, channel_id):
     try:
+        channel = bot.get_channel(channel_id)
+
+        if channel is None:
+            print("Channel not found!")
+            return
+
         raw = run_rcon("list")
 
         players = set()
@@ -31,24 +28,7 @@ async def minecraft_to_discord(bot):
             except:
                 pass
 
-        channel = bot.get_channel(DISCORD_CHANNEL_ID)
-
-        if not hasattr(minecraft_to_discord, "last"):
-            minecraft_to_discord.last = set()
-
-        joined = players - minecraft_to_discord.last
-        left = minecraft_to_discord.last - players
-
-        for p in joined:
-            await channel.send(f"🟢 {p} зашёл на сервер")
-
-        for p in left:
-            await channel.send(f"🔴 {p} вышел с сервера")
-
-        minecraft_to_discord.last = players
-
-        return players
+        await channel.send(f"🟢 Online: {', '.join(players) if players else 'no players'}")
 
     except Exception as e:
         print("MC->Discord error:", e)
-        return set()
