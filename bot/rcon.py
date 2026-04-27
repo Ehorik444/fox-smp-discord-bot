@@ -1,8 +1,8 @@
 from mcrcon import MCRcon
 
 RCON_HOST = "c11.play2go.cloud"
-RCON_PORT = 20837
-RCON_PASSWORD = "YOUR_PASSWORD"
+RCON_PORT = 20738
+RCON_PASSWORD = "hfyG4v5SShHNLZhlVOtTZ0TotBvenJZtEkOuASq4MlsOZLYQ8stXFbbrblFvOWOeVjyU6o5TWu1WahKnKNJShXoIUEhsTbEPLDG"
 
 
 def run_rcon(command: str):
