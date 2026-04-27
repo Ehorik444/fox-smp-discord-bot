@@ -168,7 +168,7 @@ async def panel(interaction: discord.Interaction):
         return
 
     embed = discord.Embed(
-        title="🎮 Заявки на SMP сервер",
+        title="🎮 Заявка на сервер",
         description="Нажмите кнопку ниже, чтобы подать заявку",
         color=0xfe8b29
     )
