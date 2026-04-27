@@ -11,12 +11,17 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# LOAD EXTENSIONS
+# LOAD EXTENSIONS (ПРАВИЛЬНО)
 # =========================
 
-async def load_extensions():
+async def setup_hook():
     await bot.load_extension("panel")
     await bot.load_extension("applications")
+
+    await bot.tree.sync()
+    print("🔁 Slash commands synced")
+
+bot.setup_hook = setup_hook
 
 # =========================
 # READY
@@ -25,13 +30,6 @@ async def load_extensions():
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-
-    try:
-        await load_extensions()
-        await bot.tree.sync()
-        print("🔁 Slash commands synced")
-    except Exception as e:
-        print("Error:", e)
 
 # =========================
 # RUN
