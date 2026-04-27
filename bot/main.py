@@ -1,3 +1,5 @@
+print("=== BOT STARTING ===")
+print("TOKEN:", "OK" if TOKEN else "MISSING")
 import os
 import asyncio
 import traceback
