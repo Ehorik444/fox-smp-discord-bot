@@ -1,13 +1,21 @@
 import discord
 from discord.ext import commands
 import os
+import time
 from rcon import run_rcon
 
 APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ACCEPT_ROLE_ID = int(os.getenv("ACCEPT_ROLE_ID", "0"))
 
+# 🧠 хранение заявок и кулдауна
+active_applications = set()
+cooldowns = {}
+
+COOLDOWN_TIME = 600  # 10 минут
+
 # =========================
-# 📩 MODAL (форма заявки)
+# 📩 MODAL
 # =========================
 
 class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
@@ -19,6 +27,28 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
     about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
+
+        user_id = interaction.user.id
+        now = time.time()
+
+        # ⏳ КУЛДАУН
+        if user_id in cooldowns and now - cooldowns[user_id] < COOLDOWN_TIME:
+            await interaction.response.send_message(
+                "⏳ Подожди перед новой заявкой",
+                ephemeral=True
+            )
+            return
+
+        # 🧠 АНТИ-ДУБЛЬ
+        if user_id in active_applications:
+            await interaction.response.send_message(
+                "❌ У тебя уже есть активная заявка",
+                ephemeral=True
+            )
+            return
+
+        active_applications.add(user_id)
+        cooldowns[user_id] = now
 
         channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
 
@@ -33,8 +63,7 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
         embed.add_field(name="Друг", value=self.friend.value or "Нет")
         embed.add_field(name="О себе", value=self.about.value)
 
-        # сохраняем ID пользователя
-        embed.set_footer(text=str(interaction.user.id))
+        embed.set_footer(text=str(user_id))
 
         await channel.send(embed=embed, view=ReviewView())
 
@@ -44,7 +73,7 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
         )
 
 # =========================
-# 📩 КНОПКА ПОДАЧИ
+# 📩 КНОПКА
 # =========================
 
 class ApplicationView(discord.ui.View):
@@ -60,97 +89,73 @@ class ApplicationView(discord.ui.View):
         await interaction.response.send_modal(ApplicationModal())
 
 # =========================
-# 🧑‍💼 АДМИН ПАНЕЛЬ
+# 🧑‍💼 REVIEW
 # =========================
 
 class ReviewView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # =========================
-    # ✅ ПРИНЯТЬ
-    # =========================
-    @discord.ui.button(
-        label="✅ Принять",
-        style=discord.ButtonStyle.success,
-        custom_id="accept_app"
-    )
+    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.success, custom_id="accept_app")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        try:
-            embed = interaction.message.embeds[0]
+        embed = interaction.message.embeds[0]
+        user_id = int(embed.footer.text)
+        member = interaction.guild.get_member(user_id)
+        nickname = embed.fields[0].value
 
-            user_id = int(embed.footer.text)
-            member = interaction.guild.get_member(user_id)
+        # 🎮 whitelist
+        run_rcon(f"whitelist add {nickname}")
 
-            nickname = embed.fields[0].value
+        # 🎭 роль
+        role = interaction.guild.get_role(ACCEPT_ROLE_ID)
+        if role and member:
+            await member.add_roles(role)
 
-            # 🎮 whitelist
-            result = run_rcon(f"whitelist add {nickname}")
+        # убрать из активных
+        active_applications.discard(user_id)
 
-            if result is None:
-                await interaction.response.send_message("❌ Ошибка RCON", ephemeral=True)
-                return
+        embed.color = 0x00ff00
+        embed.title = "✅ Заявка принята"
+        await interaction.message.edit(embed=embed, view=None)
 
-            # 🎭 роль
-            role = interaction.guild.get_role(ACCEPT_ROLE_ID)
-            if role and member:
-                await member.add_roles(role)
+        # 📊 лог
+        log = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        if log:
+            await log.send(f"✅ Принят: {member} ({nickname})")
 
-            # обновляем embed
-            embed.color = 0x00ff00
-            embed.title = "✅ Заявка принята"
+        if member:
+            try:
+                await member.send("🎉 Ты принят на сервер!")
+            except:
+                pass
 
-            await interaction.message.edit(embed=embed, view=None)
+        await interaction.response.send_message("✅ Готово", ephemeral=True)
 
-            # сообщение игроку
-            if member:
-                try:
-                    await member.send(
-                        f"🎉 Ваша заявка принята!\n"
-                        f"Вы добавлены в whitelist как: **{nickname}**"
-                    )
-                except:
-                    pass
-
-            await interaction.response.send_message("✅ Принято", ephemeral=True)
-
-        except Exception as e:
-            print("ACCEPT ERROR:", e)
-            await interaction.response.send_message("❌ Ошибка", ephemeral=True)
-
-    # =========================
-    # ❌ ОТКЛОНИТЬ
-    # =========================
-    @discord.ui.button(
-        label="❌ Отклонить",
-        style=discord.ButtonStyle.danger,
-        custom_id="deny_app"
-    )
+    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger, custom_id="deny_app")
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        try:
-            embed = interaction.message.embeds[0]
+        embed = interaction.message.embeds[0]
+        user_id = int(embed.footer.text)
+        member = interaction.guild.get_member(user_id)
 
-            user_id = int(embed.footer.text)
-            member = interaction.guild.get_member(user_id)
+        active_applications.discard(user_id)
 
-            embed.color = 0xff0000
-            embed.title = "❌ Заявка отклонена"
+        embed.color = 0xff0000
+        embed.title = "❌ Заявка отклонена"
+        await interaction.message.edit(embed=embed, view=None)
 
-            await interaction.message.edit(embed=embed, view=None)
+        log = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        if log:
+            await log.send(f"❌ Отклонен: {member}")
 
-            if member:
-                try:
-                    await member.send("❌ Ваша заявка отклонена")
-                except:
-                    pass
+        if member:
+            try:
+                await member.send("❌ Тебя не приняли")
+            except:
+                pass
 
-            await interaction.response.send_message("❌ Отклонено", ephemeral=True)
-
-        except Exception as e:
-            print("DENY ERROR:", e)
-            await interaction.response.send_message("❌ Ошибка", ephemeral=True)
+        await interaction.response.send_message("❌ Готово", ephemeral=True)
 
 # =========================
 # ⚙️ COG
@@ -160,16 +165,31 @@ class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="заявка", description="Создать сообщение с заявкой")
+    @commands.hybrid_command(name="заявка", description="Создать заявку")
     async def app_panel(self, ctx):
 
         embed = discord.Embed(
-            title="📩 Заявка на сервер",
-            description="Нажми кнопку ниже",
+            title="📩 Заявка",
+            description="Нажми кнопку",
             color=0xfe8b29
         )
 
         await ctx.send(embed=embed, view=ApplicationView())
+
+    # 🟢 ONLINE
+    @commands.hybrid_command(name="online", description="Онлайн Minecraft")
+    async def online(self, ctx):
+
+        result = run_rcon("list")
+
+        embed = discord.Embed(title="🟢 Онлайн сервера", color=0x00ff00)
+
+        if result:
+            embed.description = f"```{result}```"
+        else:
+            embed.description = "❌ Сервер недоступен"
+
+        await ctx.send(embed=embed)
 
 # =========================
 # 🚀 SETUP
@@ -177,7 +197,5 @@ class Applications(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Applications(bot))
-
-    # 🔥 чтобы кнопки НЕ умирали
     bot.add_view(ApplicationView())
     bot.add_view(ReviewView())
