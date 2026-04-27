@@ -28,44 +28,51 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ======================================================
-# 🔘 APPLY PANEL
+# 🧾 MODAL (ЗАЯВКА)
 # ======================================================
+class ApplyModal(discord.ui.Modal, title="Заявка на SMP сервер"):
 
-class ApplyModal(discord.ui.Modal, title="SMP Application"):
-
-    nickname = discord.ui.TextInput(label="Minecraft Nick")
-    age = discord.ui.TextInput(label="Age")
-    source = discord.ui.TextInput(label="How did you find us?")
-    friend = discord.ui.TextInput(label="Friend (optional)", required=False)
-    about = discord.ui.TextInput(label="About you", style=discord.TextStyle.paragraph)
+    nickname = discord.ui.TextInput(label="Ник в Minecraft")
+    age = discord.ui.TextInput(label="Возраст")
+    source = discord.ui.TextInput(label="Откуда узнали сервер?")
+    friend = discord.ui.TextInput(label="Ник друга (для розыгрышей)", required=False)
+    about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         channel = bot.get_channel(APPLICATION_CHANNEL_ID)
 
         embed = discord.Embed(
-            title="📩 New Application",
-            color=0x00ff00
+            title="📩 Новая заявка на SMP сервер",
+            color=0xfe8b29
         )
 
-        embed.add_field(name="Nick", value=self.nickname.value, inline=False)
-        embed.add_field(name="Age", value=self.age.value, inline=False)
-        embed.add_field(name="Source", value=self.source.value, inline=False)
-        embed.add_field(name="Friend", value=self.friend.value or "None", inline=False)
-        embed.add_field(name="About", value=self.about.value, inline=False)
+        embed.add_field(name="Ник", value=self.nickname.value, inline=False)
+        embed.add_field(name="Возраст", value=self.age.value, inline=False)
+        embed.add_field(name="Источник", value=self.source.value, inline=False)
+        embed.add_field(name="Друг", value=self.friend.value or "Не указан", inline=False)
+        embed.add_field(name="О себе", value=self.about.value, inline=False)
+
+        embed.set_footer(text=f"Пользователь: {interaction.user}")
 
         await channel.send(embed=embed)
 
         await interaction.response.send_message(
-            "✅ Sent!",
+            "✅ Ваша заявка отправлена!",
             ephemeral=True
         )
 
-
+# ======================================================
+# 🔘 КНОПКА ПОДАЧИ ЗАЯВКИ
+# ======================================================
 class ApplyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📩 Apply", style=discord.ButtonStyle.green)
+    @discord.ui.button(
+        label="📩 Подать заявку",
+        style=discord.ButtonStyle.primary,
+        emoji="🟠"
+    )
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ApplyModal())
 
@@ -75,16 +82,15 @@ class ApplyView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    print(f"✅ Бот запущен: {bot.user}")
 
     try:
         await bot.tree.sync()
-        print("🔁 Slash commands synced")
+        print("🔁 Slash команды синхронизированы")
     except Exception as e:
         print("Sync error:", e)
 
     bot.loop.create_task(mc_loop())
-
 
 @bot.event
 async def on_message(message):
@@ -93,80 +99,69 @@ async def on_message(message):
             return
 
         await discord_to_mc(message)
-
         await bot.process_commands(message)
 
     except Exception:
         traceback.print_exc()
 
 # ======================================================
-# MC LOOP (SAFE - NO SPAM CONTROL HERE)
+# MC LOOP
 # ======================================================
-
 async def mc_loop():
     await bot.wait_until_ready()
-
-    print("MC LOOP STARTED")
 
     while not bot.is_closed():
         try:
             await minecraft_to_discord(bot, CHANNEL_ID)
-
-        except Exception:
+        except:
             traceback.print_exc()
 
         await asyncio.sleep(5)
 
 # ======================================================
-# SLASH COMMANDS
+# SLASH COMMANDS (РУССКИЕ)
 # ======================================================
 
-@bot.tree.command(name="apply", description="Apply to SMP")
+@bot.tree.command(name="apply", description="Подать заявку на SMP сервер")
 async def apply(interaction: discord.Interaction, nickname: str, reason: str):
-    try:
-        create_application(interaction.user.id, nickname, reason)
-        await interaction.response.send_message("🧾 Saved", ephemeral=True)
-    except:
-        traceback.print_exc()
+    create_application(interaction.user.id, nickname, reason)
+    await interaction.response.send_message("🧾 Заявка отправлена!", ephemeral=True)
 
 
-@bot.tree.command(name="report", description="Report player")
+@bot.tree.command(name="report", description="Пожаловаться на игрока")
 async def report(interaction: discord.Interaction, target: str, reason: str):
-    try:
-        create_report(interaction.user.name, target, reason)
-        await interaction.response.send_message("🚨 Sent", ephemeral=True)
-    except:
-        traceback.print_exc()
+    create_report(interaction.user.name, target, reason)
+    await interaction.response.send_message("🚨 Жалоба отправлена!", ephemeral=True)
 
 
-@bot.tree.command(name="verify", description="Link MC account")
+@bot.tree.command(name="verify", description="Привязать Minecraft аккаунт")
 async def verify(interaction: discord.Interaction, mc_name: str):
-    try:
-        code = await start_verification(interaction.user.id, mc_name)
-        await interaction.response.send_message(f"🔐 Code: {code}", ephemeral=True)
-    except:
-        traceback.print_exc()
+    code = await start_verification(interaction.user.id, mc_name)
+    await interaction.response.send_message(
+        f"🔐 Код отправлен в Minecraft: {code}",
+        ephemeral=True
+    )
 
 # ======================================================
-# ADMIN PANEL
+# АДМИН ПАНЕЛЬ
 # ======================================================
 
-@bot.tree.command(name="setup_apply_panel", description="Create apply panel")
-async def setup_apply_panel(interaction: discord.Interaction):
+@bot.tree.command(name="панель_заявок", description="Создать панель заявок")
+async def panel(interaction: discord.Interaction):
 
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("No permission", ephemeral=True)
+        await interaction.response.send_message("❌ Нет прав", ephemeral=True)
         return
 
     embed = discord.Embed(
-        title="🎮 SMP Applications",
-        description="Click button below to apply",
-        color=0x3498db
+        title="🎮 Заявки на SMP сервер",
+        description="Нажмите кнопку ниже, чтобы подать заявку",
+        color=0xfe8b29
     )
 
     await interaction.channel.send(embed=embed, view=ApplyView())
 
-    await interaction.response.send_message("Panel created", ephemeral=True)
+    await interaction.response.send_message("✅ Панель создана", ephemeral=True)
 
 # ======================================================
 # RUN
