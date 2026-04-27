@@ -1,17 +1,26 @@
 import os
+import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import Button, View, Modal, TextInput
 from dotenv import load_dotenv
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID"))
+GUILD_ID = int(os.getenv("GUILD_ID")) if os.getenv("GUILD_ID") else None
+CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID")) if os.getenv("APPLICATION_CHANNEL_ID") else None
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
+intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
@@ -81,6 +90,7 @@ class ApplicationModal(Modal, title="📋 Заявка на Fox SMP"):
             channel = bot.get_channel(CHANNEL_ID)
             
             if not channel:
+                logger.error(f"Канал {CHANNEL_ID} не найден")
                 await interaction.response.send_message(
                     "❌ Ошибка: канал не найден. Обратитесь к администратору.",
                     ephemeral=True
@@ -146,12 +156,26 @@ class ApplicationModal(Modal, title="📋 Заявка на Fox SMP"):
                 ephemeral=True
             )
             
+            logger.info(f"Новая заявка от {interaction.user.name}: {self.nickname.value}")
+            
+        except asyncio.TimeoutError:
+            logger.error("Timeout при обработке заявки")
+            try:
+                await interaction.response.send_message(
+                    "❌ Время ожидания истекло. Попробуйте позже.",
+                    ephemeral=True
+                )
+            except:
+                pass
         except Exception as e:
-            print(f"Ошибка при обработке заявки: {e}")
-            await interaction.response.send_message(
-                "❌ Произошла ошибка при отправке заявки. Попробуйте позже.",
-                ephemeral=True
-            )
+            logger.error(f"Ошибка при обработке заявки: {e}", exc_info=True)
+            try:
+                await interaction.response.send_message(
+                    "❌ Произошла ошибка при отправке заявки. Попробуйте позже.",
+                    ephemeral=True
+                )
+            except:
+                pass
 
 
 class ApplyView(View):
@@ -167,83 +191,140 @@ class ApplyView(View):
     )
     async def apply_button(self, interaction: discord.Interaction, button: Button):
         """Кнопка для открытия модального окна"""
-        await interaction.response.send_modal(ApplicationModal())
+        try:
+            await interaction.response.send_modal(ApplicationModal())
+        except Exception as e:
+            logger.error(f"Ошибка при открытии модального окна: {e}")
+            await interaction.response.send_message(
+                "❌ Ошибка при открытии формы. Попробуйте позже.",
+                ephemeral=True
+            )
 
 
 @bot.event
 async def on_ready():
     """Событие при запуске бота"""
-    print(f"✅ Бот запущен как {bot.user}")
-    print(f"📊 Статус: {bot.user.status}")
+    logger.info(f"✅ Бот запущен как {bot.user}")
+    logger.info(f"📊 Статус: {bot.user.status}")
+    logger.info(f"🔗 ID сервера: {GUILD_ID}")
+    logger.info(f"💬 ID канала для заявок: {CHANNEL_ID}")
+    
     try:
         synced = await bot.tree.sync()
-        print(f"🔄 Синхронизировано {len(synced)} команд")
+        logger.info(f"🔄 Синхронизировано {len(synced)} команд")
     except Exception as e:
-        print(f"❌ Ошибка при синхронизации команд: {e}")
+        logger.error(f"❌ Ошибка при синхронизации команд: {e}")
+    
+    # Запуск задачи мониторинга
+    if not check_connection.is_running():
+        check_connection.start()
+
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    """Глобальная обработка ошибок"""
+    logger.error(f"Ошибка в событии {event}:", exc_info=True)
+
+
+@bot.event
+async def on_disconnect():
+    """Событие отключения"""
+    logger.warning("⚠️ Бот отключился от Discord!")
+
+
+@tasks.loop(minutes=5)
+async def check_connection():
+    """Проверка подключения каждые 5 минут"""
+    try:
+        if bot.is_closed():
+            logger.error("❌ Соединение потеряно! Переподключение...")
+            await bot.close()
+        else:
+            logger.info("✅ Бот онлайн и работает нормально")
+    except Exception as e:
+        logger.error(f"Ошибка при проверке соединения: {e}")
+
+
+@check_connection.before_loop
+async def before_check_connection():
+    """Ожидание готовности бота перед началом проверок"""
+    await bot.wait_until_ready()
 
 
 @bot.command(name="apply", description="Отправить кнопку заявки")
 async def apply_command(ctx):
     """Команда для отправки кнопки заявки"""
-    view = ApplyView()
-    embed = discord.Embed(
-        title="📋 Подать заявку на Fox SMP",
-        description="Нажмите кнопку ниже, чтобы заполнить заявку на присоединение к нашему серверу.",
-        color=discord.Color.from_rgb(0, 255, 136)
-    )
-    embed.add_field(
-        name="ℹ️ Что потребуется?",
-        value="• Ваш ник в Minecraft\n"
-              "• Возраст (8-100 лет)\n"
-              "• Откуда вы узнали о сервере\n"
-              "• Ник друга для розыгрышей\n"
-              "• Небольшое описание о себе",
-        inline=False
-    )
-    embed.set_color(discord.Color.from_rgb(0, 255, 136))
-    
-    await ctx.send(embed=embed, view=view)
+    try:
+        view = ApplyView()
+        embed = discord.Embed(
+            title="📋 Подать заявку на Fox SMP",
+            description="Нажмите кнопку ниже, чтобы заполнить заявку на присоединение к нашему серверу.",
+            color=discord.Color.from_rgb(0, 255, 136)
+        )
+        embed.add_field(
+            name="ℹ️ Что потребуется?",
+            value="• Ваш ник в Minecraft\n"
+                  "• Возраст (8-100 лет)\n"
+                  "• Откуда вы узнали о сервере\n"
+                  "• Ник друга для розыгрышей\n"
+                  "• Небольшое описание о себе",
+            inline=False
+        )
+        embed.set_color(discord.Color.from_rgb(0, 255, 136))
+        
+        await ctx.send(embed=embed, view=view)
+        logger.info(f"Команда !apply выполнена пользователем {ctx.author.name}")
+    except Exception as e:
+        logger.error(f"Ошибка в команде apply: {e}")
+        await ctx.send("❌ Ошибка при отправке панели заявок")
 
 
 @bot.command(name="setup", description="Установить панель заявок")
 async def setup_command(ctx):
     """Команда для установки панели заявок"""
-    view = ApplyView()
-    embed = discord.Embed(
-        title="🎮 Fox SMP - Система приёма заявок",
-        description="Заинтересованы присоединиться к нашему сообществу?",
-        color=discord.Color.from_rgb(0, 255, 136)
-    )
-    embed.add_field(
-        name="🚀 Как подать заявку?",
-        value="Нажмите кнопку **'📝 Подать заявку'** и заполните форму",
-        inline=False
-    )
-    embed.add_field(
-        name="⏱️ Время рассмотрения",
-        value="Обычно ответ приходит в течение 24 часов",
-        inline=False
-    )
-    embed.add_field(
-        name="🎯 Требования",
-        value="• Возраст: 8+\n"
-              "• Стабильное интернет соединение\n"
-              "• Уважение к игрокам и правилам сервера",
-        inline=False
-    )
-    embed.set_image(url="https://images-ext-1.discordapp.net/external/W5pB4_l2C9jJNjkKLvGxmCZGGKz0pf3u4YvyQxD8Sww/%3Fsize%3D1024/https/cdn.discordapp.com/app-icons/780904845291921409/8ea04fcda4d8e09e1fbb1c9e36f26ca9.png")
-    
-    await ctx.send(embed=embed, view=view)
+    try:
+        view = ApplyView()
+        embed = discord.Embed(
+            title="🎮 Fox SMP - Система приёма заявок",
+            description="Заинтересованы присоединиться к нашему сообществу?",
+            color=discord.Color.from_rgb(0, 255, 136)
+        )
+        embed.add_field(
+            name="🚀 Как подать заявку?",
+            value="Нажмите кнопку **'📝 Подать заявку'** и заполните форму",
+            inline=False
+        )
+        embed.add_field(
+            name="⏱️ Время рассмотрения",
+            value="Обычно ответ приходит в течение 24 часов",
+            inline=False
+        )
+        embed.add_field(
+            name="🎯 Требования",
+            value="• Возраст: 8+\n"
+                  "• Стабильное интернет соединение\n"
+                  "• Уважение к игрокам и правилам сервера",
+            inline=False
+        )
+        
+        await ctx.send(embed=embed, view=view)
+        logger.info(f"Команда !setup выполнена пользователем {ctx.author.name}")
+    except Exception as e:
+        logger.error(f"Ошибка в команде setup: {e}")
+        await ctx.send("❌ Ошибка при установке панели заявок")
 
 
 @bot.command(name="ping")
 async def ping(ctx):
     """Команда для проверки задержки бота"""
-    latency = round(bot.latency * 1000)
-    await ctx.send(f"🏓 Pong! Задержка: `{latency}ms`")
+    try:
+        latency = round(bot.latency * 1000)
+        await ctx.send(f"🏓 Pong! Задержка: `{latency}ms`")
+    except Exception as e:
+        logger.error(f"Ошибка в команде ping: {e}")
+        await ctx.send("❌ Ошибка при получении пинга")
 
 
-# Обработка ошибок
 @bot.event
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
@@ -251,14 +332,47 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ У вас нет прав для выполнения этой команды!")
     elif isinstance(error, commands.CommandNotFound):
         pass  # Игнорировать несуществующие команды
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Команда требует дополнительные аргументы")
     else:
-        print(f"Ошибка команды: {error}")
+        logger.error(f"Ошибка команды: {error}", exc_info=True)
         await ctx.send(f"❌ Произошла ошибка: {error}")
+
+
+async def main():
+    """Главная функция с обработкой переподключения"""
+    max_retries = 5
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            async with bot:
+                await bot.start(TOKEN)
+        except discord.errors.LoginFailure:
+            logger.error("❌ ОШИБКА: Неверный токен Discord!")
+            return
+        except Exception as e:
+            retry_count += 1
+            wait_time = min(60 * retry_count, 300)  # Максимум 5 минут
+            logger.error(f"❌ Бот упал! Попытка переподключения {retry_count}/{max_retries} через {wait_time}с")
+            logger.error(f"Ошибка: {e}", exc_info=True)
+            await asyncio.sleep(wait_time)
+    
+    logger.error("❌ Максимум попыток переподключения достигнут!")
 
 
 if __name__ == "__main__":
     if not TOKEN:
-        print("❌ ОШИБКА: DISCORD_TOKEN не найден в файле .env")
+        logger.error("❌ ОШИБКА: DISCORD_TOKEN не найден в файле .env")
         exit(1)
     
-    bot.run(TOKEN)
+    if not GUILD_ID or not CHANNEL_ID:
+        logger.error("❌ ОШИБКА: GUILD_ID или APPLICATION_CHANNEL_ID не найдены в файле .env")
+        exit(1)
+    
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
