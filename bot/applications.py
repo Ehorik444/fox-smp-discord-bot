@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 
 APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID", "0"))
+ACCEPT_ROLE_ID = int(os.getenv("ACCEPT_ROLE_ID", "0"))
 
 # =========================
 # MODAL
@@ -18,33 +19,32 @@ class ApplicationModal(discord.ui.Modal, title="📩 Заявка"):
 
     async def on_submit(self, interaction: discord.Interaction):
 
-        try:
-            channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
+        channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
 
-            embed = discord.Embed(
-                title="📩 Новая заявка",
-                color=0xfe8b29
-            )
+        embed = discord.Embed(
+            title="📩 Новая заявка",
+            color=0xfe8b29
+        )
 
-            embed.add_field(name="Ник", value=self.nickname.value)
-            embed.add_field(name="Возраст", value=self.age.value)
-            embed.add_field(name="Источник", value=self.source.value)
-            embed.add_field(name="Друг", value=self.friend.value or "Нет")
-            embed.add_field(name="О себе", value=self.about.value)
+        embed.add_field(name="Ник", value=self.nickname.value)
+        embed.add_field(name="Возраст", value=self.age.value)
+        embed.add_field(name="Источник", value=self.source.value)
+        embed.add_field(name="Друг", value=self.friend.value or "Нет")
+        embed.add_field(name="О себе", value=self.about.value)
 
-            if channel:
-                await channel.send(embed=embed)
+        embed.set_footer(text=str(interaction.user.id))  # 🔥 сохраняем ID
 
-            await interaction.response.send_message(
-                "✅ Заявка отправлена!",
-                ephemeral=True
-            )
+        view = ReviewView()
 
-        except Exception as e:
-            print("Modal error:", e)
+        await channel.send(embed=embed, view=view)
+
+        await interaction.response.send_message(
+            "✅ Заявка отправлена!",
+            ephemeral=True
+        )
 
 # =========================
-# PERSISTENT VIEW
+# VIEW ПОДАЧИ
 # =========================
 
 class ApplicationView(discord.ui.View):
@@ -54,10 +54,74 @@ class ApplicationView(discord.ui.View):
     @discord.ui.button(
         label="📩 Подать заявку",
         style=discord.ButtonStyle.success,
-        custom_id="apply_button"  # 🔥 КЛЮЧЕВОЕ
+        custom_id="apply_button"
     )
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ApplicationModal())
+
+# =========================
+# VIEW ПРОВЕРКИ (АДМИНЫ)
+# =========================
+
+class ReviewView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="✅ Принять",
+        style=discord.ButtonStyle.success,
+        custom_id="accept_app"
+    )
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        user_id = int(interaction.message.embeds[0].footer.text)
+        member = interaction.guild.get_member(user_id)
+
+        if not member:
+            await interaction.response.send_message("❌ Игрок не найден", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(ACCEPT_ROLE_ID)
+
+        if role:
+            await member.add_roles(role)
+
+        # меняем embed
+        embed = interaction.message.embeds[0]
+        embed.color = 0x00ff00
+        embed.title = "✅ Заявка принята"
+
+        await interaction.message.edit(embed=embed, view=None)
+
+        try:
+            await member.send("🎉 Ваша заявка принята! Добро пожаловать на сервер.")
+        except:
+            pass
+
+        await interaction.response.send_message("✅ Принято", ephemeral=True)
+
+    @discord.ui.button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.danger,
+        custom_id="deny_app"
+    )
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        user_id = int(interaction.message.embeds[0].footer.text)
+        member = interaction.guild.get_member(user_id)
+
+        embed = interaction.message.embeds[0]
+        embed.color = 0xff0000
+        embed.title = "❌ Заявка отклонена"
+
+        await interaction.message.edit(embed=embed, view=None)
+
+        try:
+            await member.send("❌ Ваша заявка отклонена.")
+        except:
+            pass
+
+        await interaction.response.send_message("❌ Отклонено", ephemeral=True)
 
 # =========================
 # COG
@@ -67,12 +131,12 @@ class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="заявка", description="Создать сообщение с заявкой")
-    async def send_application_panel(self, ctx):
+    @commands.hybrid_command(name="заявка", description="Создать кнопку заявки")
+    async def app_panel(self, ctx):
 
         embed = discord.Embed(
-            title="📩 Заявки на сервер",
-            description="Нажми кнопку ниже чтобы подать заявку",
+            title="📩 Заявка на сервер",
+            description="Нажми кнопку ниже",
             color=0xfe8b29
         )
 
@@ -85,5 +149,5 @@ class Applications(commands.Cog):
 async def setup(bot):
     await bot.add_cog(Applications(bot))
 
-    # 🔥 РЕГИСТРАЦИЯ PERSISTENT VIEW
     bot.add_view(ApplicationView())
+    bot.add_view(ReviewView())
