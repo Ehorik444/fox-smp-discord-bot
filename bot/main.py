@@ -12,20 +12,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 # =========================
-# AUTO-DEFER (🔥 главное)
-# =========================
-
-@bot.tree.interaction_check
-async def auto_defer(interaction: discord.Interaction):
-    try:
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-    except:
-        pass
-    return True
-
-
-# =========================
 # LOAD EXTENSIONS
 # =========================
 
@@ -43,29 +29,25 @@ async def on_ready():
     print(f"✅ Бот онлайн: {bot.user}")
 
     try:
-        synced = await bot.tree.sync()
-        print(f"🔁 Синхронизировано команд: {len(synced)}")
+        await bot.tree.sync()
+        print("🔁 Slash команды синхронизированы")
     except Exception as e:
         print("Sync error:", e)
 
 
 # =========================
-# SETUP HOOK
+# SETUP HOOK (ВАЖНО)
 # =========================
 
-@bot.setup_hook
 async def setup_hook():
     await load_extensions()
+
+bot.setup_hook = setup_hook  # 💥 ВОТ ТУТ ФИКС
 
 
 # =========================
 # ERROR HANDLER
 # =========================
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    print(f"🔥 Ошибка: {event}", args, kwargs)
-
 
 @bot.tree.error
 async def on_app_command_error(interaction, error):
@@ -73,9 +55,9 @@ async def on_app_command_error(interaction, error):
 
     try:
         if interaction.response.is_done():
-            await interaction.followup.send("❌ Ошибка при выполнении команды", ephemeral=True)
+            await interaction.followup.send("❌ Ошибка команды", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Ошибка при выполнении команды", ephemeral=True)
+            await interaction.response.send_message("❌ Ошибка команды", ephemeral=True)
     except:
         pass
 
