@@ -26,11 +26,11 @@ async def sender_worker(bot):
                     channel = await bot.fetch_channel(channel_id)
 
                 await channel.send(embed=embed, view=view)
-                print("✅ Заявка отправлена")
+                print("✅ Отправлено")
                 break
 
             except Exception as e:
-                print(f"❌ Ошибка ({attempt+1}):", e)
+                print(f"❌ Retry {attempt+1}:", e)
                 await asyncio.sleep(2 * (attempt + 1))
 
         send_queue.task_done()
@@ -42,31 +42,31 @@ async def sender_worker(bot):
 
 class ApplicationModal(discord.ui.Modal, title="📋 Заявка на сервер"):
 
-    nick = discord.ui.TextInput(label="Ник в Minecraft")
+    nick = discord.ui.TextInput(label="Ник")
     age = discord.ui.TextInput(label="Возраст")
     source = discord.ui.TextInput(label="Откуда узнал?")
-    friend = discord.ui.TextInput(label="Ник друга", required=False)
+    friend = discord.ui.TextInput(label="Друг", required=False)
     about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        embed = discord.Embed(title="📩 Новая заявка", color=0xfe8b29)
+        embed = discord.Embed(title="📩 Заявка", color=0xfe8b29)
 
-        embed.add_field(name="👤 Пользователь", value=interaction.user.mention, inline=False)
+        embed.add_field(name="👤", value=interaction.user.mention)
         embed.add_field(name="🎮 Ник", value=self.nick.value)
-        embed.add_field(name="🎂 Возраст", value=self.age.value)
-        embed.add_field(name="📢 Откуда узнал", value=self.source.value, inline=False)
-        embed.add_field(name="👥 Друг", value=self.friend.value or "Нет", inline=False)
-        embed.add_field(name="📝 О себе", value=self.about.value, inline=False)
+        embed.add_field(name="🎂", value=self.age.value)
+        embed.add_field(name="📢", value=self.source.value, inline=False)
+        embed.add_field(name="👥", value=self.friend.value or "Нет", inline=False)
+        embed.add_field(name="📝", value=self.about.value, inline=False)
 
         await send_queue.put((APPLICATION_CHANNEL_ID, embed, ReviewView()))
 
-        await interaction.followup.send("✅ Заявка отправлена!", ephemeral=True)
+        await interaction.followup.send("✅ Заявка отправлена", ephemeral=True)
 
 
 # =========================
-# APPLY BUTTON
+# APPLY VIEW
 # =========================
 
 class ApplyView(discord.ui.View):
@@ -79,7 +79,7 @@ class ApplyView(discord.ui.View):
 
 
 # =========================
-# REVIEW BUTTONS
+# REVIEW VIEW
 # =========================
 
 class ReviewView(discord.ui.View):
@@ -106,13 +106,14 @@ class Applications(commands.Cog):
 
     @app_commands.command(name="заявка", description="Создать кнопку заявки")
     async def application(self, interaction: discord.Interaction):
+
         embed = discord.Embed(
             title="📨 Подача заявки",
             description="Нажмите кнопку ниже",
             color=0xfe8b29
         )
 
-        await interaction.response.send_message(embed=embed, view=ApplyView())
+        await interaction.followup.send(embed=embed, view=ApplyView())
 
 
 # =========================
@@ -123,6 +124,5 @@ async def setup(bot):
     cog = Applications(bot)
     await bot.add_cog(cog)
 
-    # 🔥 ВАЖНО — фикс "умирающих" кнопок
     bot.add_view(ApplyView())
     bot.add_view(ReviewView())
