@@ -9,9 +9,10 @@ class Panel(commands.Cog):
 
     @app_commands.command(name="панель", description="Создать панель")
     async def panel(self, interaction: discord.Interaction):
+
         embed = discord.Embed(
-            title="📌 Панель проекта",
-            description="Выберите нужный раздел",
+            title="📌 Панель",
+            description="Выберите раздел",
             color=0xfe8b29
         )
 
@@ -24,7 +25,7 @@ class Panel(commands.Cog):
         view.add_item(discord.ui.Button(label="💬 Telegram", url="https://t.me/foxsmp_official"))
         view.add_item(discord.ui.Button(label="🎥 Twitch", url="https://m.twitch.tv/0_ehorik_0_"))
 
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view)
 
 
 async def setup(bot):
