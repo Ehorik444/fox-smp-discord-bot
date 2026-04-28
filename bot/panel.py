@@ -1,77 +1,32 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 
-# =========================
-# VIEW (ПАНЕЛЬ КНОПОК)
-# =========================
-
-class MainPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        self.add_item(discord.ui.Button(
-            label="💎 Донат",
-            style=discord.ButtonStyle.link,
-            url="https://buy.fox-smp.ru"
-        ))
-
-        self.add_item(discord.ui.Button(
-            label="🧱 Сборка",
-            style=discord.ButtonStyle.link,
-            url="https://modrinth.com/project/foxsmpmodpack"
-        ))
-
-        self.add_item(discord.ui.Button(
-            label="📱 Telegram",
-            style=discord.ButtonStyle.link,
-            url="https://t.me/foxsmp_official"
-        ))
-
-        self.add_item(discord.ui.Button(
-            label="🟦 VK",
-            style=discord.ButtonStyle.link,
-            url="https://vk.ru/foxsmp_official"
-        ))
-
-        self.add_item(discord.ui.Button(
-            label="▶️ YouTube",
-            style=discord.ButtonStyle.link,
-            url="https://youtube.com/@0_ehorik_0.YouTube"
-        ))
-
-        self.add_item(discord.ui.Button(
-            label="🟣 Twitch",
-            style=discord.ButtonStyle.link,
-            url="https://m.twitch.tv/0_ehorik_0_/"
-        ))
-
-# =========================
-# COG
-# =========================
 
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ⚡ ОДНА команда = slash + prefix одновременно (без дублей)
-    @commands.hybrid_command(
-        name="панель",
-        description="Создать панель сервера"
-    )
-    async def panel(self, ctx: commands.Context):
-
+    @app_commands.command(name="панель", description="Создать главную панель")
+    async def panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🎮 FOXSMP PANEL",
-            description="Главная панель сервера",
+            title="📌 Панель проекта",
+            description="Выберите нужный раздел",
             color=0xfe8b29
         )
 
-        await ctx.send(embed=embed, view=MainPanelView())
+        view = discord.ui.View()
 
+        view.add_item(discord.ui.Button(label="📜 Правила", url="https://example.com"))
+        view.add_item(discord.ui.Button(label="💎 Донат", url="https://buy.fox-smp.ru"))
+        view.add_item(discord.ui.Button(label="📦 Сборка", url="https://modrinth.com/project/foxsmpmodpack"))
+        view.add_item(discord.ui.Button(label="💬 Telegram", url="https://t.me/foxsmp_official"))
+        view.add_item(discord.ui.Button(label="📱 VK", url="https://vk.ru/foxsmp_official"))
+        view.add_item(discord.ui.Button(label="▶ YouTube", url="https://youtube.com/@0_ehorik_0.YouTube"))
+        view.add_item(discord.ui.Button(label="🎥 Twitch", url="https://m.twitch.tv/0_ehorik_0_"))
 
-# =========================
-# SETUP
-# =========================
+        await interaction.response.send_message(embed=embed, view=view)
+
 
 async def setup(bot):
     await bot.add_cog(Panel(bot))
