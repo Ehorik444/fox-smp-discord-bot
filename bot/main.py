@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 import os
-import asyncio
 
 TOKEN = os.getenv("TOKEN")
 
@@ -27,7 +26,7 @@ async def load_extensions():
 
 @bot.event
 async def on_ready():
-    print(f"✅ Бот запущен как {bot.user}")
+    print(f"✅ Бот онлайн: {bot.user}")
 
     try:
         await bot.tree.sync()
@@ -37,7 +36,7 @@ async def on_ready():
 
 
 # =========================
-# SETUP HOOK (важно!)
+# SETUP HOOK
 # =========================
 
 @bot.setup_hook
@@ -46,11 +45,16 @@ async def setup_hook():
 
 
 # =========================
-# ANTI-CRASH RUN
+# ERROR LOG
 # =========================
 
-while True:
-    try:
-        bot.run(TOKEN)
-    except Exception as e:
-        print("CRASH:", e)
+@bot.event
+async def on_error(event, *args, **kwargs):
+    print(f"🔥 Ошибка: {event}", args, kwargs)
+
+
+# =========================
+# RUN
+# =========================
+
+bot.run(TOKEN)
