@@ -1,72 +1,124 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
+import json
 import os
+from datetime import datetime, timedelta
 
 # ====== НАСТРОЙКИ ======
-APPLICATION_CHANNEL_ID = os.getenv("APPLICATION_CHANNEL_ID")
+APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
-try:
-    APPLICATION_CHANNEL_ID = int(APPLICATION_CHANNEL_ID)
-except:
-    APPLICATION_CHANNEL_ID = None
-    print("⚠️ APPLICATION_CHANNEL_ID не задан")
+DATA_FILE = "applications_data.json"
 
-# ====== МОДАЛКА ======
-class ApplyModal(discord.ui.Modal, title="Заявка"):
-    name = discord.ui.TextInput(label="Ваше имя", required=True)
-    age = discord.ui.TextInput(label="Ваш возраст", required=True)
-    reason = discord.ui.TextInput(label="Почему хотите к нам?", style=discord.TextStyle.paragraph)
+# ====== ЗАГРУЗКА ДАННЫХ ======
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {}
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        if APPLICATION_CHANNEL_ID is None:
-            await interaction.response.send_message("❌ Канал не настроен", ephemeral=True)
-            return
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-        channel = interaction.client.get_channel(APPLICATION_CHANNEL_ID)
+# ====== ПРОВЕРКА ЛИМИТА ======
+def can_apply(user_id):
+    data = load_data()
+    user = data.get(str(user_id))
 
-        if channel is None:
-            await interaction.response.send_message("❌ Канал не найден", ephemeral=True)
-            return
+    if not user:
+        return True
 
-        embed = discord.Embed(
-            title="📩 Новая заявка",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Имя", value=self.name.value, inline=False)
-        embed.add_field(name="Возраст", value=self.age.value, inline=False)
-        embed.add_field(name="Причина", value=self.reason.value, inline=False)
-        embed.set_footer(text=f"От: {interaction.user}")
+    last_time = datetime.fromisoformat(user["last_apply"])
+    return datetime.utcnow() - last_time > timedelta(days=1)
 
-        await channel.send(embed=embed)
+def update_apply(user_id):
+    data = load_data()
+    data[str(user_id)] = {
+        "last_apply": datetime.utcnow().isoformat()
+    }
+    save_data(data)
 
-        await interaction.response.send_message("✅ Заявка отправлена!", ephemeral=True)
-
-# ====== КНОПКА ======
+# ====== VIEW ======
 class ApplyView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # ОБЯЗАТЕЛЬНО для persistent
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="📨 Подать заявку", style=discord.ButtonStyle.green, custom_id="apply_button")
-    async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ApplyModal())
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept_btn")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Заявка принята", ephemeral=True)
 
-# ====== КОМАНДА ======
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(f"✅ {interaction.user} принял заявку")
+
+    @discord.ui.button(label="Отказать", style=discord.ButtonStyle.red, custom_id="deny_btn")
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Заявка отклонена", ephemeral=True)
+
+        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(f"❌ {interaction.user} отклонил заявку")
+
+# ====== COG ======
 class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command()
-    async def applypanel(self, ctx):
-        """Отправить панель заявок"""
+    @app_commands.command(name="apply", description="Подать заявку")
+    async def apply(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+
+        # анти-спам (1 раз в день)
+        if not can_apply(user_id):
+            await interaction.response.send_message(
+                "❌ Ты уже отправлял заявку сегодня",
+                ephemeral=True
+            )
+            return
+
+        update_apply(user_id)
+
         embed = discord.Embed(
-            title="📋 Заявки",
-            description="Нажмите кнопку ниже, чтобы подать заявку",
-            color=discord.Color.blurple()
+            title="📩 Новая заявка",
+            description=f"Пользователь: {interaction.user.mention}",
+            color=discord.Color.blue()
         )
 
-        await ctx.send(embed=embed, view=ApplyView())
+        channel = self.bot.get_channel(APPLICATION_CHANNEL_ID)
+        if not channel:
+            await interaction.response.send_message("❌ Канал не найден", ephemeral=True)
+            return
 
-# ====== ЗАГРУЗКА ======
+        await channel.send(embed=embed, view=ApplyView())
+
+        # лог
+        log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(f"📨 Новая заявка от {interaction.user}")
+
+        await interaction.response.send_message(
+            "✅ Заявка отправлена!",
+            ephemeral=True
+        )
+
+    @app_commands.command(name="applypanel", description="Создать панель заявок")
+    async def applypanel(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="📋 Заявки",
+            description="Нажми кнопку ниже чтобы подать заявку",
+            color=discord.Color.green()
+        )
+
+        await interaction.channel.send(embed=embed)
+
+        await interaction.response.send_message(
+            "✅ Панель создана",
+            ephemeral=True
+        )
+
+# ====== SETUP ======
 async def setup(bot):
     await bot.add_cog(Applications(bot))
-    bot.add_view(ApplyView())  # важно для persistent
+    bot.add_view(ApplyView())
