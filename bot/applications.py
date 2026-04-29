@@ -1,128 +1,118 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import asyncio
+import os
 
-APPLICATION_CHANNEL_ID = 1496595878700388463
-
-send_queue = asyncio.Queue()
-
-
-# =========================
-# WORKER
-# =========================
-
-async def sender_worker(bot):
-    await bot.wait_until_ready()
-
-    while True:
-        channel_id, embed, view = await send_queue.get()
-
-        for attempt in range(5):
-            try:
-                channel = bot.get_channel(channel_id)
-
-                if channel is None:
-                    channel = await bot.fetch_channel(channel_id)
-
-                await channel.send(embed=embed, view=view)
-                print("✅ Отправлено")
-                break
-
-            except Exception as e:
-                print(f"❌ Retry {attempt+1}:", e)
-                await asyncio.sleep(2 * (attempt + 1))
-
-        send_queue.task_done()
-
+APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID"))
 
 # =========================
 # MODAL
 # =========================
 
-class ApplicationModal(discord.ui.Modal, title="📋 Заявка на сервер"):
+class ApplyModal(discord.ui.Modal, title="📩 Заявка на сервер"):
 
-    nick = discord.ui.TextInput(label="Ник")
-    age = discord.ui.TextInput(label="Возраст")
-    source = discord.ui.TextInput(label="Откуда узнал?")
-    friend = discord.ui.TextInput(label="Друг", required=False)
-    about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.paragraph)
+    nick = discord.ui.TextInput(label="Ваш ник", required=True)
+    age = discord.ui.TextInput(label="Возраст", required=True)
+    source = discord.ui.TextInput(label="Откуда узнали?", required=True)
+    friend = discord.ui.TextInput(label="Ник друга", required=False)
+    about = discord.ui.TextInput(label="О себе", style=discord.TextStyle.long, required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        channel = interaction.guild.get_channel(APPLICATION_CHANNEL_ID)
 
-        embed = discord.Embed(title="📩 Заявка", color=0xfe8b29)
+        if not channel:
+            await interaction.response.send_message("❌ Канал заявок не найден", ephemeral=True)
+            return
 
-        embed.add_field(name="👤", value=interaction.user.mention)
-        embed.add_field(name="🎮 Ник", value=self.nick.value)
-        embed.add_field(name="🎂", value=self.age.value)
-        embed.add_field(name="📢", value=self.source.value, inline=False)
-        embed.add_field(name="👥", value=self.friend.value or "Нет", inline=False)
-        embed.add_field(name="📝", value=self.about.value, inline=False)
+        embed = discord.Embed(
+            title="📩 Новая заявка",
+            color=0xfe8b29
+        )
+        embed.add_field(name="👤 Ник", value=self.nick.value, inline=False)
+        embed.add_field(name="🎂 Возраст", value=self.age.value, inline=False)
+        embed.add_field(name="📢 Откуда узнал", value=self.source.value, inline=False)
+        embed.add_field(name="👥 Друг", value=self.friend.value or "Нет", inline=False)
+        embed.add_field(name="📝 О себе", value=self.about.value, inline=False)
+        embed.set_footer(text=f"ID: {interaction.user.id}")
 
-        await send_queue.put((APPLICATION_CHANNEL_ID, embed, ReviewView()))
+        await channel.send(embed=embed, view=AcceptView())
 
-        await interaction.followup.send("✅ Заявка отправлена", ephemeral=True)
-
+        await interaction.response.send_message("✅ Заявка отправлена!", ephemeral=True)
 
 # =========================
-# APPLY VIEW
+# BUTTON VIEW (ПОДАТЬ)
 # =========================
 
 class ApplyView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # ВАЖНО!
 
-    @discord.ui.button(label="📨 Подать заявку", style=discord.ButtonStyle.primary)
+    @discord.ui.button(
+        label="📩 Подать заявку",
+        style=discord.ButtonStyle.primary,
+        custom_id="apply_button"  # ВАЖНО!
+    )
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ApplicationModal())
-
+        await interaction.response.send_modal(ApplyModal())
 
 # =========================
-# REVIEW VIEW
+# ACCEPT / DECLINE
 # =========================
 
-class ReviewView(discord.ui.View):
+class AcceptView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None)  # ВАЖНО!
 
-    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.success)
+    @discord.ui.button(
+        label="✅ Принять",
+        style=discord.ButtonStyle.success,
+        custom_id="accept_button"
+    )
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("✅ Принято", ephemeral=True)
+        member_id = int(interaction.message.embeds[0].footer.text.replace("ID: ", ""))
+        member = interaction.guild.get_member(member_id)
 
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger)
-    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Отклонено", ephemeral=True)
+        if member:
+            role = discord.utils.get(interaction.guild.roles, name="Игрок")
+            if role:
+                await member.add_roles(role)
 
+        await interaction.response.send_message("✅ Заявка принята", ephemeral=True)
+
+    @discord.ui.button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.danger,
+        custom_id="decline_button"
+    )
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("❌ Заявка отклонена", ephemeral=True)
 
 # =========================
-# COG
+# COMMAND
 # =========================
 
 class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        bot.loop.create_task(sender_worker(bot))
 
-    @app_commands.command(name="заявка", description="Создать кнопку заявки")
-    async def application(self, interaction: discord.Interaction):
-
+    @app_commands.command(name="заявка", description="Создать сообщение с заявкой")
+    async def create_apply(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="📨 Подача заявки",
-            description="Нажмите кнопку ниже",
+            title="📩 Заявка на сервер",
+            description="Нажми кнопку ниже чтобы подать заявку",
             color=0xfe8b29
         )
 
-        await interaction.followup.send(embed=embed, view=ApplyView())
-
+        await interaction.channel.send(embed=embed, view=ApplyView())
+        await interaction.response.send_message("✅ Сообщение создано", ephemeral=True)
 
 # =========================
 # SETUP
 # =========================
 
 async def setup(bot):
-    cog = Applications(bot)
-    await bot.add_cog(cog)
+    await bot.add_cog(Applications(bot))
 
+    # РЕГИСТРАЦИЯ persistent views (ВАЖНО)
     bot.add_view(ApplyView())
-    bot.add_view(ReviewView())
+    bot.add_view(AcceptView())
