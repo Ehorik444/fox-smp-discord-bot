@@ -1,53 +1,65 @@
 import asyncpg
+import sqlite3
 import os
-from dotenv import load_dotenv
+from config import DATABASE_URL
 
-load_dotenv()
+USE_SQLITE = False
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    USE_SQLITE = True
+    conn = sqlite3.connect("data.db")
+    cur = conn.cursor()
 
-
-class Database:
-    def __init__(self):
-        self.pool = None
-
-    async def connect(self):
-        self.pool = await asyncpg.create_pool(DATABASE_URL)
-
-    async def init(self):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-            CREATE TABLE IF NOT EXISTS applications (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                guild_id BIGINT,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-            """)
-
-    async def get_last_application(self, user_id: int, guild_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-            SELECT * FROM applications
-            WHERE user_id=$1 AND guild_id=$2
-            ORDER BY created_at DESC
-            LIMIT 1
-            """, user_id, guild_id)
-
-    async def create_application(self, user_id: int, guild_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval("""
-            INSERT INTO applications(user_id, guild_id)
-            VALUES($1, $2)
-            RETURNING id
-            """, user_id, guild_id)
-
-    async def update_status(self, app_id: int, status: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-            UPDATE applications SET status=$1 WHERE id=$2
-            """, status, app_id)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        content TEXT,
+        status TEXT,
+        created_at TEXT
+    )
+    """)
+    conn.commit()
 
 
-db = Database()
+pool = None
+
+
+async def init_db():
+    global pool
+    if USE_SQLITE:
+        return
+
+    pool = await asyncpg.create_pool(DATABASE_URL)
+
+
+async def create_application(user_id: int, content: str):
+    if USE_SQLITE:
+        cur.execute(
+            "INSERT INTO applications (user_id, content, status, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (user_id, content, "pending"),
+        )
+        conn.commit()
+        return
+
+    async with pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO applications(user_id, content, status) VALUES($1,$2,$3)",
+            user_id,
+            content,
+            "pending",
+        )
+
+
+async def update_status(app_id: int, status: str):
+    if USE_SQLITE:
+        cur.execute("UPDATE applications SET status=? WHERE id=?", (status, app_id))
+        conn.commit()
+        return
+
+    async with pool.acquire() as con:
+        await con.execute(
+            "UPDATE applications SET status=$1 WHERE id=$2",
+            status,
+            app_id,
+        )
