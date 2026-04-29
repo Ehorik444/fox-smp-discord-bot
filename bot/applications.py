@@ -1,61 +1,96 @@
 import discord
 from discord import app_commands
-from db import create_application, update_status
-from config import APPLICATION_LOG_CHANNEL
+from db import create_application
 from utils import check_cooldown, check_daily_limit
+from config import APPLICATION_LOG_CHANNEL
 
 
-class ApplyView(discord.ui.View):
-    def __init__(self, app_id: int):
-        super().__init__(timeout=None)
-        self.app_id = app_id
+# =========================
+# VIEW (КНОПКА ПОДАТЬ ЗАЯВКУ)
+# =========================
 
-    @discord.ui.button(label="✅ Принять", style=discord.ButtonStyle.green)
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await update_status(self.app_id, "accepted")
-        await interaction.response.send_message("Заявка принята", ephemeral=True)
-
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.red)
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await update_status(self.app_id, "rejected")
-        await interaction.response.send_message("Заявка отклонена", ephemeral=True)
-
-
-class Applications(app_commands.Group):
-
+class ApplyButtonView(discord.ui.View):
     def __init__(self):
-        super().__init__(name="apply", description="Система заявок")
+        super().__init__(timeout=None)
 
-    @app_commands.command(name="send", description="Отправить заявку")
-    async def send(self, interaction: discord.Interaction, text: str):
+    @discord.ui.button(
+        label="📩 Подать заявку",
+        style=discord.ButtonStyle.green,
+        custom_id="apply_button_main"
+    )
+    async def apply_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ApplyModal())
+
+
+# =========================
+# MODAL (форма заявки)
+# =========================
+
+class ApplyModal(discord.ui.Modal, title="Заявка"):
+    text = discord.ui.TextInput(
+        label="Твоя заявка",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
 
         user_id = interaction.user.id
 
         if not check_cooldown(user_id):
-            return await interaction.response.send_message(
-                "⏳ Кулдаун 60 секунд", ephemeral=True
-            )
+            return await interaction.response.send_message("⏳ Кулдаун 60 сек", ephemeral=True)
 
         if not check_daily_limit(user_id):
-            return await interaction.response.send_message(
-                "🚫 Лимит 1 заявка в день", ephemeral=True
-            )
+            return await interaction.response.send_message("🚫 1 заявка в день", ephemeral=True)
 
-        await create_application(user_id, text)
+        await create_application(user_id, str(self.text))
 
         channel = interaction.client.get_channel(APPLICATION_LOG_CHANNEL)
 
         embed = discord.Embed(
-            title="Новая заявка",
-            description=text,
-            color=0x00ff00,
+            title="📥 Новая заявка",
+            description=self.text,
+            color=0x2ecc71
         )
 
-        msg = await channel.send(embed=embed)
-        await msg.edit(view=ApplyView(msg.id))
+        await channel.send(embed=embed)
 
         await interaction.response.send_message("✅ Заявка отправлена", ephemeral=True)
 
 
+# =========================
+# SLASH COMMAND GROUP
+# =========================
+
+class ApplyPanel(app_commands.Group):
+
+    def __init__(self):
+        super().__init__(name="apply", description="Система заявок")
+
+    @app_commands.command(name="panel", description="Создать панель заявок")
+    async def panel(self, interaction: discord.Interaction):
+
+        embed = discord.Embed(
+            title="📌 Заявки",
+            description="Нажми кнопку ниже, чтобы подать заявку",
+            color=0x3498db
+        )
+
+        await interaction.channel.send(
+            embed=embed,
+            view=ApplyButtonView()
+        )
+
+        await interaction.response.send_message("✅ Панель создана", ephemeral=True)
+
+
+# =========================
+# SETUP EXTENSION
+# =========================
+
 async def setup(bot):
-    bot.tree.add_command(Applications())
+    bot.tree.add_command(ApplyPanel())
+
+    # 🔥 важно: регистрация persistent view
+    bot.add_view(ApplyButtonView())
