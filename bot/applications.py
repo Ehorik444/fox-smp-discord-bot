@@ -1,124 +1,79 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import json
+from db import db
 import os
 from datetime import datetime, timedelta
 
-# ====== НАСТРОЙКИ ======
-APPLICATION_CHANNEL_ID = int(os.getenv("APPLICATION_CHANNEL_ID", "0"))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 
-DATA_FILE = "applications_data.json"
 
-# ====== ЗАГРУЗКА ДАННЫХ ======
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# ---------- BUTTONS ----------
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-# ====== ПРОВЕРКА ЛИМИТА ======
-def can_apply(user_id):
-    data = load_data()
-    user = data.get(str(user_id))
-
-    if not user:
-        return True
-
-    last_time = datetime.fromisoformat(user["last_apply"])
-    return datetime.utcnow() - last_time > timedelta(days=1)
-
-def update_apply(user_id):
-    data = load_data()
-    data[str(user_id)] = {
-        "last_apply": datetime.utcnow().isoformat()
-    }
-    save_data(data)
-
-# ====== VIEW ======
-class ApplyView(discord.ui.View):
-    def __init__(self):
+class AppView(discord.ui.View):
+    def __init__(self, app_id: int):
         super().__init__(timeout=None)
+        self.app_id = app_id
 
-    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green, custom_id="accept_btn")
+    @discord.ui.button(label="Принять", style=discord.ButtonStyle.green)
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("✅ Заявка принята", ephemeral=True)
+        await db.update_status(self.app_id, "accepted")
 
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"✅ {interaction.user} принял заявку")
+        await interaction.response.send_message("✅ Принято", ephemeral=True)
 
-    @discord.ui.button(label="Отказать", style=discord.ButtonStyle.red, custom_id="deny_btn")
-    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Заявка отклонена", ephemeral=True)
+        channel = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            await channel.send(f"✅ Заявка #{self.app_id} принята {interaction.user.mention}")
 
-        log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"❌ {interaction.user} отклонил заявку")
+    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.red)
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await db.update_status(self.app_id, "rejected")
 
-# ====== COG ======
+        await interaction.response.send_message("❌ Отклонено", ephemeral=True)
+
+        channel = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        if channel:
+            await channel.send(f"❌ Заявка #{self.app_id} отклонена {interaction.user.mention}")
+
+
+# ---------- COG ----------
+
 class Applications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name="apply", description="Подать заявку")
     async def apply(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
 
-        # анти-спам (1 раз в день)
-        if not can_apply(user_id):
-            await interaction.response.send_message(
-                "❌ Ты уже отправлял заявку сегодня",
-                ephemeral=True
+        # 🔒 анти-спам (1 заявка в день)
+        last = await db.get_last_application(interaction.user.id, interaction.guild.id)
+
+        if last:
+            if last["created_at"] + timedelta(days=1) > datetime.utcnow():
+                return await interaction.response.send_message(
+                    "⛔ Можно только 1 заявку в день",
+                    ephemeral=True
+                )
+
+        app_id = await db.create_application(
+            interaction.user.id,
+            interaction.guild.id
+        )
+
+        view = AppView(app_id)
+
+        await interaction.response.send_message(
+            f"📩 Заявка #{app_id} отправлена",
+            ephemeral=True
+        )
+
+        log = interaction.guild.get_channel(LOG_CHANNEL_ID)
+        if log:
+            await log.send(
+                f"📩 Новая заявка #{app_id} от {interaction.user.mention}",
+                view=view
             )
-            return
 
-        update_apply(user_id)
 
-        embed = discord.Embed(
-            title="📩 Новая заявка",
-            description=f"Пользователь: {interaction.user.mention}",
-            color=discord.Color.blue()
-        )
-
-        channel = self.bot.get_channel(APPLICATION_CHANNEL_ID)
-        if not channel:
-            await interaction.response.send_message("❌ Канал не найден", ephemeral=True)
-            return
-
-        await channel.send(embed=embed, view=ApplyView())
-
-        # лог
-        log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"📨 Новая заявка от {interaction.user}")
-
-        await interaction.response.send_message(
-            "✅ Заявка отправлена!",
-            ephemeral=True
-        )
-
-    @app_commands.command(name="applypanel", description="Создать панель заявок")
-    async def applypanel(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="📋 Заявки",
-            description="Нажми кнопку ниже чтобы подать заявку",
-            color=discord.Color.green()
-        )
-
-        await interaction.channel.send(embed=embed)
-
-        await interaction.response.send_message(
-            "✅ Панель создана",
-            ephemeral=True
-        )
-
-# ====== SETUP ======
 async def setup(bot):
     await bot.add_cog(Applications(bot))
-    bot.add_view(ApplyView())
