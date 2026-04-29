@@ -1,29 +1,26 @@
 import discord
 from discord.ext import commands
-import os
-from dotenv import load_dotenv
-from db import db
-
-load_dotenv()
-
-TOKEN = os.getenv("TOKEN")
+from config import TOKEN
+from db import init_db
 
 
 intents = discord.Intents.default()
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents.message_content = True
 
 
-async def load_extensions():
-    await bot.load_extension("applications")
+class Bot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        await init_db()
+
+        await self.load_extension("applications")
+
+        await self.tree.sync()
 
 
-@bot.event
-async def setup_hook():
-    await db.connect()
-    await db.init()
-    await load_extensions()
+bot = Bot()
 
 
 @bot.event
