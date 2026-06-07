@@ -147,7 +147,7 @@ async def panel(ctx, action: str):
         embed = discord.Embed(
             title="ЗАЯВКА",
             description="Нажми кнопку ниже, чтобы подать заявку",
-            color=0xff0000  # Красный цвет заголовка
+            color=0xfe8b29 # Красный цвет заголовка
         )
         view = ApplicationView()
         await ctx.send(embed=embed, view=view)
