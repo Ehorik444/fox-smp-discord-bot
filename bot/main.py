@@ -142,11 +142,11 @@ class AdminReviewView(ui.View):
 @app_commands.checks.has_permissions(administrator=True)
 async def application_setup(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="Заявка на Minecraft сервер",
+        title="Заявка на сервер",
         description="Нажмите на кнопку ниже, чтобы заполнить анкету и получить доступ к серверу!",
         color=discord.Color.green()
     )
-    await interaction.response.send_message("Сообщение создано.", ephemeral=True)
+    await interaction.response.send_message("Заявка создана.", ephemeral=True)
     await interaction.channel.send(embed=embed, view=PersistentApplyView())
 @bot.event
 async def on_ready():
