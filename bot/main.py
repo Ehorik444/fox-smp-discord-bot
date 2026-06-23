@@ -153,4 +153,11 @@ async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    if TOKEN == 'YOUR_BOT_TOKEN':
+        print("ОШИБКА: Вы не установили токен бота!")
+        print("Пожалуйста, замените 'YOUR_BOT_TOKEN' в файле main.py на настоящий токен.")
+    else:
+        try:
+            bot.run(TOKEN)
+        except discord.errors.LoginFailure:
+            print("ОШИБКА: Неверный токен! Проверьте правильность токена в Discord Developer Portal.")
