@@ -11,13 +11,13 @@ from mcrcon import MCRcon
 # ==========================================
 # Замените значения ниже на ваши данные
 TOKEN = 'YOUR_BOT_TOKEN'
-GUILD_ID = 123456789012345678          # ID вашего сервера
-ADMIN_CHANNEL_ID = 123456789012345678  # ID канала для модераторов
-NOVICE_ROLE_ID = 123456789012345678    # ID роли "Новичок"
+GUILD_ID = 1173662030801162280         # ID вашего сервера
+ADMIN_CHANNEL_ID = 1514331798778417282  # ID канала для модераторов
+NOVICE_ROLE_ID = 1210237868203704342    # ID роли "Новичок"
 # Настройки Minecraft RCON
-RCON_HOST = '127.0.0.1'
-RCON_PORT = 25575
-RCON_PASSWORD = 'your_rcon_password'
+RCON_HOST = 'c11.play2go.cloud'
+RCON_PORT = 20834
+RCON_PASSWORD = 'hfyG4v5SShHNLZhlVOtTZ0TotBvenJZtEkOuASq4MlsOZLYQ8stXFbbrblFvOWOeVjyU6o5TWu1WahKnKNJShXoIUEhsTbEPLDG'
 COOLDOWN_FILE = 'cooldowns.json'
 # ==========================================
 # Функции для работы с КД (сохранение в файл, чтобы не пропало после перезагрузки)
