@@ -136,7 +136,7 @@ class AdminReviewView(ui.View):
                 await member.remove_roles(role)
                 status_msg += "\n🔓 Роль 'Новичок' снята."
             try:
-                await member.send(f"🎉 Поздравляем! Ваша заявка на сервер одобрена. Ваш ник **{self.nickname}** добавлен в белый список.")
+                await member.send(f"🎉 Поздравляем! Ваша заявка на сервер одобрена. Ваш ник '**{self.nickname}**' добавлен в белый список.")
             except:
                 status_msg += "\n⚠️ Не удалось отправить ЛС игроку."
         
@@ -158,8 +158,8 @@ class AdminReviewView(ui.View):
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🌍 Набор на сервер",
-        description="Хочешь играть с нами? Жми на кнопку ниже и заполняй анкету!\n\n*Убедись, что твой профиль открыт для получения личных сообщений.*",
+        title="Заявка",
+        description="Заявка на сервер\n\n*Убедись, что твой профиль открыт для получения личных сообщений.*",
         color=discord.Color.green()
     )
     await interaction.channel.send(embed=embed, view=PersistentApplyView())
