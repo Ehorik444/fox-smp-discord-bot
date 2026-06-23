@@ -16,7 +16,7 @@ ADMIN_CHANNEL_ID = 1514331798778417282  # ID канала для модерат�
 NOVICE_ROLE_ID = 1210237868203704342    # ID роли "Новичок"
 # Настройки Minecraft RCON
 RCON_HOST = 'c11.play2go.cloud'
-RCON_PORT = 20834
+RCON_PORT = 20738
 RCON_PASSWORD = 'hfyG4v5SShHNLZhlVOtTZ0TotBvenJZtEkOuASq4MlsOZLYQ8stXFbbrblFvOWOeVjyU6o5TWu1WahKnKNJShXoIUEhsTbEPLDG'
 COOLDOWN_FILE = 'cooldowns.json'
 # ==========================================
