@@ -7,13 +7,13 @@ import json
 import os
 from mcrcon import MCRcon
 # --- CONFIGURATION ---
-TOKEN = 'YOUR_BOT_TOKEN'
-GUILD_ID = 123456789012345678  # ID вашего сервера
-ADMIN_CHANNEL_ID = 123456789012345678  # ID канала для заявок
-NOVICE_ROLE_ID = 123456789012345678  # ID роли "Новичок"
-RCON_HOST = '127.0.0.1'
-RCON_PORT = 25575
-RCON_PASSWORD = 'your_rcon_password'
+TOKEN = ''
+GUILD_ID = 1173662030801162280  # ID вашего сервера
+ADMIN_CHANNEL_ID = 1514331798778417282  # ID канала для заявок
+NOVICE_ROLE_ID = 1210237868203704342  # ID роли "Новичок"
+RCON_HOST = 'c11.play2go.cloud'
+RCON_PORT = 20738
+RCON_PASSWORD = 'hfyG4v5SShHNLZhlVOtTZ0TotBvenJZtEkOuASq4MlsOZLYQ8stXFbbrblFvOWOeVjyU6o5TWu1WahKnKNJShXoIUEhsTbEPLDG'
 COOLDOWN_FILE = 'cooldowns.json'
 # --- COOLDOWN HELPERS ---
 def load_cooldowns():
